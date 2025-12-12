@@ -1,0 +1,23 @@
+## Python
+__pycache__/
+*.pyc
+.venv/
+backend_extension/.venv/
+backend_extension/build/
+backend_extension/**/CMakeFiles/
+backend_extension/**/CMakeCache.txt
+backend_extension/**/cmake_install.cmake
+backend_extension/**/Makefile
+backend_extension/**/*.so
+
+## Node / SvelteKit
+frontend_dashboard/node_modules/
+frontend_dashboard/.svelte-kit/
+frontend_dashboard/build/
+frontend_dashboard/.vite/
+
+## Rust / Wasm
+wasm_parser/target/
+
+## OS
+.DS_Store
