@@ -1,6 +1,10 @@
 ## Python
 __pycache__/
 *.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
 .venv/
 backend_extension/.venv/
 backend_extension/build/
@@ -15,6 +19,7 @@ frontend_dashboard/node_modules/
 frontend_dashboard/.svelte-kit/
 frontend_dashboard/build/
 frontend_dashboard/.vite/
+*.log
 
 ## Rust / Wasm
 wasm_parser/target/
