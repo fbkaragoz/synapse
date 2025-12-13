@@ -1,0 +1,64 @@
+CDLI Non-Commercial Open Source License
+Version 2.0, 2025
+
+Copyright © 2025 Fatih Burak Karagöz.
+All rights reserved.
+
+1. Grant of License
+   Subject to the terms and conditions of this License, the Copyright Holder hereby grants to every **Individual** (as defined below) a worldwide, royalty-free, non-exclusive, non-transferable, non-sublicensable license to:
+   (a) use, copy, modify, merge, publish, and distribute the Software and Derivative Works thereof; and
+   (b) prepare Derivative Works of the Software,
+   **solely for Non-Commercial Purposes**.
+
+2. Definitions
+   [cite_start]“Individual” means a natural person acting in a personal capacity or for educational, artistic, or independent academic research purposes, and **not** on behalf of or under direction of any Entity[cite: 4].
+
+   [cite_start]“Entity” means any corporation, limited liability company, partnership, joint venture, governmental authority, non-profit organization, or other organization (whether for-profit or not-for-profit)[cite: 5].
+
+   “Non-Commercial Purposes” means use that does not directly or indirectly generate revenue, provide paid services, or support the business operations of any Entity. This specifically excludes:
+    (a) Integration into a paid product or freemium service;
+    (b) Use in internal business workflows or proprietary research;
+    (c) Use as a backend for a Software-as-a-Service (SaaS) or Application Programming Interface (API) offering.
+
+   [cite_start]“Software” means the source code, object code, documentation, weights, binaries, and associated materials provided under this License[cite: 8].
+
+   [cite_start]“Derivative Work” means any work (including forks, modifications, extensions, ports, or compilations) that is based on, incorporates, or is trained on all or a portion of the Software[cite: 9].
+
+3. Restrictions & Prohibitions
+   [cite_start]3.1 **Commercial Restriction:** The license granted in Section 1 is **expressly conditioned** on the licensee’s use being limited to Non-Commercial Purposes[cite: 10]. Any use by or on behalf of an Entity is **prohibited** without separate written permission.
+
+   3.2 **AI & Data Mining Restriction:** The use of the Software, its source code, or its documentation to train, fine-tune, or validate any Machine Learning model, Large Language Model (LLM), or Artificial Intelligence system that is intended for Commercial Purposes or release under a closed-source license is strictly prohibited.
+
+4. Copyleft & License Preservation
+   4.1 Any Derivative Work must be distributed **exclusively** under this exact License (version 2.0 or later).
+   [cite_start]4.2 The full text of this License must be included in every copy or substantial portion of the Software or Derivative Work[cite: 13].
+   [cite_start]4.3 Licensees may not impose any additional terms that weaken, override, or remove the restrictions in Sections 1 or 3[cite: 14].
+
+5. Attribution
+   Every public distribution of the Software or a Derivative Work must:
+   (a) retain all copyright, patent, trademark, and attribution notices;
+   (b) prominently display the following **exact** notice:
+        ```
+        Original work: Copyright © 2025 Fatih Burak Karagöz
+        Project: Synapse
+        Licensed under the CDLI Non-Commercial Open Source License v2.0
+        ```
+
+6. Academic & Research Acknowledgment
+   If the Software or a Derivative Work is used in any academic publication, dataset, or research output, the licensee must include a citation substantially in the following form:
+   `Karagöz, F. B. (2025). Synapse. CDLI Non-Commercial Open Source License v2.0. https://github.com/fbkaragoz/synapse`
+
+7. Commercial Licensing
+   Entities requiring a commercial license may request one by written notice to the Copyright Holder. [cite_start]Silence or failure to respond does **not** constitute permission[cite: 17].
+
+8. No Warranty; Limitation of Liability
+   THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. [cite_start]IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE[cite: 18, 19].
+
+9. Termination
+   [cite_start]9.1 This License terminates automatically upon any breach of its terms[cite: 20].
+   [cite_start]9.2 Upon termination, all rights granted cease immediately, and the licensee must destroy or cease using all copies of the Software and Derivative Works[cite: 21].
+
+10. Miscellaneous
+   [cite_start]10.1 This License is governed by the laws of the **Republic of Türkiye**[cite: 22].
+   [cite_start]10.2 If any provision is held invalid, the remainder remains in full force[cite: 23].
+   10.3 The Copyright Holder may publish revised versions of this License. [cite_start]Unless the licensee explicitly adopts a newer version, this version 2.0 governs[cite: 24, 25].
