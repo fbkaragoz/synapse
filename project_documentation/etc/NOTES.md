@@ -1,6 +1,5 @@
 # Neural-Flow — Developer Notes (Scaffolding + Technical Guide)
 
-This repo is intentionally scaffold-only: placeholder files exist, but no implementation is written yet.
 The goal is a **real-time LLM activation visualization pipeline** with minimal (<5%) training overhead:
 
 - **PyTorch training loop (Python)** calls a **Python C-extension** (“probe”).
@@ -283,7 +282,7 @@ Targets:
 
 ---
 
-## Development Checklist (for the next AI/developer)
+## Development Checklist
 
 1. Decide extension build system:
    - Pick **(A) PyBind11 + setuptools** or **(B) CPython C-API + CMake**; update `backend_extension/setup.py` and/or `backend_extension/CMakeLists.txt`.

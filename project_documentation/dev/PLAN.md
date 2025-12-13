@@ -1,8 +1,5 @@
 # Project Prompt: "Neural-Flow" Real-Time LLM Visualization Engine
 
-## Role
-Senior Systems Architect & Full-Stack Engineer (C++ & WebAssembly Expert)
-
 ## Objective
 Develop a high-performance, real-time 3D visualization dashboard to monitor internal neuron activations of an LLM during training without significantly impacting training throughput.
 
