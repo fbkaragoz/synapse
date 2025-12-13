@@ -5,14 +5,6 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
-.venv/
-backend_extension/.venv/
-backend_extension/build/
-backend_extension/**/CMakeFiles/
-backend_extension/**/CMakeCache.txt
-backend_extension/**/cmake_install.cmake
-backend_extension/**/Makefile
-backend_extension/**/*.so
 
 ## Node / SvelteKit
 frontend_dashboard/node_modules/
@@ -39,6 +31,14 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+.venv/
+backend_extension/.venv/
+backend_extension/build/
+backend_extension/**/CMakeFiles/
+backend_extension/**/CMakeCache.txt
+backend_extension/**/cmake_install.cmake
+backend_extension/**/Makefile
+backend_extension/**/*.so
 
 ## IDE / Editor
 .idea/
