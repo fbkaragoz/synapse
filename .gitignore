@@ -23,6 +23,26 @@ frontend_dashboard/.vite/
 
 ## Rust / Wasm
 wasm_parser/target/
+wasm_parser/pkg/
+
+## Coverage / Test artifacts
+coverage/
+.coverage
+htmlcov/
+*.lcov
 
 ## OS
 .DS_Store
+Thumbs.db
+
+## Environment files
+.env
+.env.*
+!.env.example
+
+## IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
