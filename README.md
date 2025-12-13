@@ -1,6 +1,7 @@
 # Synapse
 
 Real-time, low-overhead visualization of LLM internals during training.
+![Synapse-v0.1.0](https://github.com/user-attachments/assets/42b2e436-4dcc-4009-bfcd-2996b7d8fcfc)
 
 Synapse streams live tensor activation statistics from a PyTorch training loop into a browser-based 3D dashboard. The design goal is “debuggability without slowing training”: keep the hot-path minimal, do aggregation/sparsification off-thread, and ship compact binary packets over WebSockets.
 
