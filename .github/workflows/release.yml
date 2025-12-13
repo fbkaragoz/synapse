@@ -1,0 +1,52 @@
+name: Build Release Artifacts
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build wheel
+        run: |
+          pip install build
+          cd backend_extension
+          python -m build --wheel
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: backend_extension/dist/*.whl
+
+  build-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM
+        run: |
+          cd wasm_parser
+          wasm-pack build --target web --release
+          tar -czf wasm-parser.tar.gz pkg/
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: wasm_parser/wasm-parser.tar.gz
