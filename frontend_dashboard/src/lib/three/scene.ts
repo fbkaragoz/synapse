@@ -192,6 +192,12 @@ export class SceneController {
 
         // If topology exists, color the ghost grids by mean activity for macro readability.
         if (this.isTopologySetup) {
+            // If we bootstrapped topology from the first summary (1 layer),
+            // rebuild when more layer summaries arrive so the full stack appears.
+            if (summaries.length > this.lastTopologyLayerCount) {
+                this.setupTopology({ layers: summaries });
+            }
+
             for (const s of summaries) {
                 const layerId = Number(s.layer_id);
                 const mean = Number(s.mean ?? 0);
