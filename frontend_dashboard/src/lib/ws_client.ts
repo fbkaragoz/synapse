@@ -24,6 +24,17 @@ const OP_SET_MAX_SPARSE_POINTS = 4;
 let socket: WebSocket | null = null;
 let wasmParser: any = null;
 
+// Accumulate per-layer macro summaries so the UI can render a full stack.
+const layerSummaryById = new Map<number, any>();
+
+function resetState() {
+    layerSummaryById.clear();
+    layerSummaries.set([]);
+    sparseActivations.set(null);
+    modelMeta.set(null);
+    packetCount.set(0);
+}
+
 export function setWasmParser(parser: any) {
     wasmParser = parser;
 }
@@ -55,6 +66,8 @@ export function connect(url: string = 'ws://localhost:9000') {
         socket.close();
     }
 
+    resetState();
+
     socket = new WebSocket(url);
     socket.binaryType = 'arraybuffer';
 
@@ -66,6 +79,7 @@ export function connect(url: string = 'ws://localhost:9000') {
     socket.onclose = () => {
         console.log('[WS] Disconnected');
         isConnected.set(false);
+        resetState();
     };
 
     socket.onmessage = async (event) => {
@@ -98,7 +112,10 @@ export function connect(url: string = 'ws://localhost:9000') {
             }
 
             if (parsed.summaries) {
-                layerSummaries.set(parsed.summaries);
+                for (const s of parsed.summaries) {
+                    layerSummaryById.set(s.layer_id, s);
+                }
+                layerSummaries.set(Array.from(layerSummaryById.values()).sort((a, b) => a.layer_id - b.layer_id));
             }
             if (parsed.sparse) {
                 sparseActivations.set(parsed.sparse);
