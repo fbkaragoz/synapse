@@ -27,6 +27,31 @@ static std::atomic<uint32_t> g_accum_steps = 0;
 static std::atomic<uint32_t> g_broadcast_interval = 0;
 static std::atomic<uint32_t> g_max_sparse = 0;
 
+static std::vector<uint8_t> build_control_packet(uint32_t opcode, uint32_t value_u32, float value_f32) {
+    size_t payload_size = sizeof(NF_ControlPacketV1);
+    size_t total_size = sizeof(NF_PacketHeader) + payload_size;
+    std::vector<uint8_t> packet(total_size);
+    uint8_t* raw = packet.data();
+
+    NF_PacketHeader* hdr = reinterpret_cast<NF_PacketHeader*>(raw);
+    hdr->magic = 0x574C464E;
+    hdr->version = 1;
+    hdr->msg_type = NF_MSG_CONTROL;
+    hdr->flags = 0;
+    hdr->seq = g_seq++;
+    auto now = std::chrono::steady_clock::now();
+    hdr->timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+    hdr->payload_bytes = payload_size;
+
+    NF_ControlPacketV1* ctrl = reinterpret_cast<NF_ControlPacketV1*>(raw + sizeof(NF_PacketHeader));
+    ctrl->opcode = opcode;
+    ctrl->value_u32 = value_u32;
+    ctrl->value_f32 = value_f32;
+    ctrl->reserved = 0;
+
+    return packet;
+}
+
 // Layer Topology (Dynamic)
 #include <map>
 #include <mutex>
@@ -72,28 +97,17 @@ void handle_control_message(const uint8_t* data, size_t len) {
 }
 
 std::vector<uint8_t> get_state_snapshot() {
-    size_t payload_size = sizeof(NF_ControlPacketV1);
-    size_t total_size = sizeof(NF_PacketHeader) + payload_size;
-    std::vector<uint8_t> packet(total_size);
-    uint8_t* raw = packet.data();
-    
-    NF_PacketHeader* hdr = reinterpret_cast<NF_PacketHeader*>(raw);
-    hdr->magic = 0x574C464E;
-    hdr->version = 1;
-    hdr->msg_type = NF_MSG_CONTROL;
-    hdr->flags = 0;
-    hdr->seq = g_seq++;
-    auto now = std::chrono::steady_clock::now();
-    hdr->timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
-    hdr->payload_bytes = payload_size;
-    
-    NF_ControlPacketV1* ctrl = reinterpret_cast<NF_ControlPacketV1*>(raw + sizeof(NF_PacketHeader));
-    ctrl->opcode = NF_OP_SET_THRESHOLD;
-    ctrl->value_f32 = g_threshold.load();
-    ctrl->value_u32 = 0;
-    ctrl->reserved = 0;
-    
-    return packet;
+    return build_control_packet(NF_OP_SET_THRESHOLD, 0, g_threshold.load());
+}
+
+std::vector<std::vector<uint8_t>> get_state_snapshot_packets() {
+    std::vector<std::vector<uint8_t>> packets;
+    packets.reserve(4);
+    packets.push_back(build_control_packet(NF_OP_SET_THRESHOLD, 0, g_threshold.load()));
+    packets.push_back(build_control_packet(NF_OP_SET_ACCUMULATION_STEPS, g_accum_steps.load(), 0.0f));
+    packets.push_back(build_control_packet(NF_OP_SET_BROADCAST_INTERVAL, g_broadcast_interval.load(), 0.0f));
+    packets.push_back(build_control_packet(NF_OP_SET_MAX_SPARSE_POINTS, g_max_sparse.load(), 0.0f));
+    return packets;
 }
 
 std::vector<uint8_t> get_model_meta_packet() {
