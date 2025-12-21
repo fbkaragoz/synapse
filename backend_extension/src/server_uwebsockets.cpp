@@ -4,6 +4,9 @@
 
 #include <atomic>
 #include <iostream>
+#include <mutex>
+#include <unordered_set>
+#include <vector>
 
 // uWebSockets
 #include "App.h"
@@ -19,15 +22,16 @@ public:
     void start(int port, std::shared_ptr<RingBuffer> buffer) override {
         if (running_) return;
         running_ = true;
+        stop_requested_ = false;
         buffer_ = buffer;
+        listen_socket_.store(nullptr, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(connections_mutex_);
+            connections_.clear();
+        }
         
         // Start the server thread
         server_thread_ = std::thread([this, port]() {
-            // Define the struct for socket data if needed
-            struct PerSocketData {
-                /* Fill with user data if needed */
-            };
-
             // Create the app - keeping it inside the thread so the Loop belongs to this thread
             auto app = uWS::App()
                 .ws<PerSocketData>("/*", {
@@ -35,8 +39,12 @@ public:
                     .compression = uWS::SHARED_COMPRESSOR,
                     .maxPayloadLength = 16 * 1024 * 1024,
                     .idleTimeout = 60,
-                    .open = [](auto *ws) {
+                    .open = [this](auto *ws) {
                         // std::cout << "Client connected!" << std::endl;
+                        {
+                            std::lock_guard<std::mutex> lock(connections_mutex_);
+                            connections_.insert(ws);
+                        }
                         ws->subscribe("broadcast");
                         
                         // 1. Send Model Meta (Topology)
@@ -56,20 +64,20 @@ public:
                     .drain = [](auto *ws) {
                         // Backpressure handling
                     },
-                    .close = [](auto *ws, int code, std::string_view message) {
+                    .close = [this](auto *ws, int code, std::string_view message) {
                         // std::cout << "Client disconnected" << std::endl;
+                        std::lock_guard<std::mutex> lock(connections_mutex_);
+                        connections_.erase(ws);
                     }
                 })
-                .listen(port, [port](auto *token) {
+                .listen(port, [this, port](auto *token) {
                     if (token) {
+                       listen_socket_.store(token, std::memory_order_release);
                        // std::cout << "Listening on port " << port << std::endl;
                     } else {
                         std::cerr << "Failed to listen on port " << port << std::endl;
                     }
                 });
-
-            // Need a handle to the loop to defer tasks or close it
-            struct us_loop_t *loop = (struct us_loop_t *)uWS::Loop::get();
 
             // Broadcaster loop
             // We can't just block on the ring buffer here because that would block the uWS loop.
@@ -128,7 +136,10 @@ public:
             // "Use Loop::defer(...) to schedule broadcast on the WS loop thread."
             
             // So I need to capture the loop pointer.
-            loop_ = uWS::Loop::get();
+            loop_.store(uWS::Loop::get(), std::memory_order_release);
+            if (stop_requested_.load(std::memory_order_acquire)) {
+                schedule_shutdown();
+            }
             
             // Start a bridge thread that pops from queue and defers to loop
             std::thread bridge([this, &app]() {
@@ -150,7 +161,7 @@ public:
 
                      // Loop::defer is thread safe?
                      // uWebSockets documentation says: "Thread safety: ... Loop::defer is thread safe."
-                     loop_->defer([&app, ctx]() {
+                     loop_.load(std::memory_order_acquire)->defer([&app, ctx]() {
                          // We are now on the loop thread
                          // std::cout << "[Server] Broadcasting " << ctx->payload.size() << " bytes" << std::endl;
                          app.publish("broadcast", std::string_view(reinterpret_cast<char*>(ctx->payload.data()), ctx->payload.size()), uWS::OpCode::BINARY, false);
@@ -162,45 +173,24 @@ public:
             app.run();
             // cleanup
             if (bridge.joinable()) bridge.join();
+            loop_.store(nullptr, std::memory_order_release);
+            running_ = false;
         });
     }
 
     void stop() override {
         if (!running_) return;
         running_ = false;
+        stop_requested_ = true;
         
         // Stop the ring buffer so the bridge thread wakes up
         if (buffer_) buffer_->stop();
+
+        schedule_shutdown();
         
-        // Stop the uWS loop?
-        // We need to defer a close action to the loop, or just let it finish if we can signal it.
-        // If app.run() is blocking, we need to wake it up to stop it.
-        // Usually loop->defer([](){ exit_logic });
-        // But I don't have the loop pointer easily available outside.
-        // Wait, I saved it in start() but that has a race condition (start vs stop).
-        // Realistically, for this exercise, we assume valid lifecycle order.
-        
-        // In a real impl, we'd verify loop_ is set.
-        // Assuming start() has run and set loop_.
-        
-        // NOTE: loop_ usage here is tricky if start() hasn't finished.
-        // Simplified stop:
         if (server_thread_.joinable()) {
-             // We need to wake up the loop to tell it to stop?
-             // Or we just detach? No, clean exit is better.
-             // If we can't easily access loop_, let's rely on the bridge or just destoying the process for now.
-             // But let's try to be clean.
-             // I'll make loop_ a member and atomic or guarded.
+            server_thread_.join();
         }
-        
-        server_thread_.join(); // This might hang if app.run() doesn't exit.
-        // uWS::App::run() blocks until stopped? It usually runs until weird things happen or typically we need to signal it.
-        // Actually, we can't easily stop uWS::App::run() from outside without a handle.
-        // Valid way: defer a callback that calls `us_listen_socket_close` or similar, or throws/returns.
-        // But uWS::App doesn't expose a clean "stop".
-        
-        // For Phase 1 prototype, we will assume the User kills the process or we implement this fully properly later.
-        // I will add a FIXME.
     }
 
     bool is_running() const override {
@@ -208,10 +198,46 @@ public:
     }
 
 private:
+    struct PerSocketData {
+        /* Fill with user data if needed */
+    };
+
+    using Ws = uWS::WebSocket<false, true, PerSocketData>;
+
+    void schedule_shutdown() {
+        uWS::Loop* loop = loop_.load(std::memory_order_acquire);
+        if (!loop) return;
+
+        loop->defer([this]() {
+            auto* listen_socket = listen_socket_.load(std::memory_order_acquire);
+            if (listen_socket) {
+                us_listen_socket_close(0, listen_socket);
+                listen_socket_.store(nullptr, std::memory_order_release);
+            }
+
+            std::vector<Ws*> to_close;
+            {
+                std::lock_guard<std::mutex> lock(connections_mutex_);
+                to_close.assign(connections_.begin(), connections_.end());
+                connections_.clear();
+            }
+
+            for (auto* ws : to_close) {
+                if (ws) {
+                    ws->close();
+                }
+            }
+        });
+    }
+
     std::atomic<bool> running_;
+    std::atomic<bool> stop_requested_{false};
     std::thread server_thread_;
     std::shared_ptr<RingBuffer> buffer_;
-    uWS::Loop* loop_ = nullptr; // Raw pointer to the loop (thread-local to server_thread_)
+    std::atomic<uWS::Loop*> loop_{nullptr}; // Raw pointer to the loop (thread-local to server_thread_)
+    std::atomic<us_listen_socket_t*> listen_socket_{nullptr};
+    std::mutex connections_mutex_;
+    std::unordered_set<Ws*> connections_;
 };
 
 std::unique_ptr<Server> create_uwebsockets_server() {
