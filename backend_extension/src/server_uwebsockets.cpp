@@ -52,8 +52,10 @@ public:
                         ws->send(std::string_view(reinterpret_cast<char*>(meta.data()), meta.size()), uWS::OpCode::BINARY);
 
                         // 2. Send State Snapshot (Config)
-                        auto snapshot = get_state_snapshot();
-                        ws->send(std::string_view(reinterpret_cast<char*>(snapshot.data()), snapshot.size()), uWS::OpCode::BINARY);
+                        auto snapshots = get_state_snapshot_packets();
+                        for (const auto& snapshot : snapshots) {
+                            ws->send(std::string_view(reinterpret_cast<char*>(snapshot.data()), snapshot.size()), uWS::OpCode::BINARY);
+                        }
                     },
                     .message = [](auto *ws, std::string_view message, uWS::OpCode opCode) {
                         // Handle control messages from frontend
