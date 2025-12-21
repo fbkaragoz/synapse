@@ -14,6 +14,7 @@ void set_threshold(float threshold);
 // Control/Networking
 void handle_control_message(const uint8_t* data, size_t len);
 std::vector<uint8_t> get_state_snapshot();
+std::vector<std::vector<uint8_t>> get_state_snapshot_packets();
 std::vector<uint8_t> get_model_meta_packet();
 
 // The main hook function called from Python
