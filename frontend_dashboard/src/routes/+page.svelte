@@ -58,25 +58,25 @@
 
             connect();
 
-            unsubscribeThreshold = configThreshold.subscribe(val => {
+            unsubscribeThreshold = configThreshold.subscribe((val: number) => {
                 if (Math.abs(val - thresholdLocal) > 0.01) {
                     thresholdLocal = val;
                 }
             });
 
-            unsubscribeMeta = modelMeta.subscribe(meta => {
+            unsubscribeMeta = modelMeta.subscribe((meta) => {
                 if (sceneController && meta) {
                     sceneController.setupTopology(meta);
                 }
             });
 
-            unsubscribeSummaries = layerSummaries.subscribe(data => {
+            unsubscribeSummaries = layerSummaries.subscribe((data) => {
                 if (sceneController && data.length > 0) {
                     sceneController.updateLayers(data);
                 }
             });
 
-            unsubscribeSparse = sparseActivations.subscribe(data => {
+            unsubscribeSparse = sparseActivations.subscribe((data) => {
                 if (sceneController && data) {
                     sceneController.updateSparse(data);
                 }
