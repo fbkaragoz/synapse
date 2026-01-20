@@ -42,7 +42,73 @@ The system must visualize live tensor activations from a PyTorch training loop.
 
 ---
 
-## 3. Deliverables & Constraints
+## 3. Implementation Phases
+
+### Phase 1: Code Quality Foundation
+**Focus:** Establish robust code quality standards across all components.
+
+**Frontend (TypeScript/Svelte):**
+- Add ESLint and Prettier configuration
+- Fix all `any` type annotations with proper types
+- Add TypeScript strict mode compliance
+
+**Backend (C++):**
+- Add Clang-Format configuration
+- Extract global static variables into `NeuralProbe` class
+- Replace magic numbers with named constants
+- Add comprehensive error handling
+- Fix raw pointer safety issues (uWS::Loop*)
+- Add unit tests for ring buffer and protocol
+
+**Wasm Parser (Rust):**
+- Add Rustfmt configuration
+- Improve error handling in protocol parsing
+- Add unit tests for all parsing functions
+
+**Cross-Component:**
+- Add pre-commit hooks with lint-staged
+- Establish consistent logging infrastructure
+
+---
+
+### Phase 2: Development Experience
+**Focus:** Improve developer workflow and tooling.
+
+- Create unified Makefile for building all components
+- Add root package.json with common operations
+- Comprehensive setup guide in README
+- Architecture documentation with diagrams
+- API documentation for all interfaces
+- Add .editorconfig
+- Improve GitHub Actions CI/CD pipeline
+- Add CONTRIBUTING.md with guidelines
+
+---
+
+### Phase 3: Feature Enhancement
+**Focus:** Implement core and advanced visualization features.
+
+**High Priority:**
+- Implement `broadcast_interval` and `accumulation_steps` logic
+- Attention pattern visualization (token→token edges)
+- Residual stream norm visualization
+- Top-k routed activations (MoE) visualization
+
+**Medium Priority:**
+- Time-series/scrolling view of activations
+- Layer detail drill-down on click
+- Configurable layer filtering in UI
+- WebSocket connection authentication
+- Zero-copy ring buffer implementation
+
+**Low Priority:**
+- Packet compression (zstd support)
+- Recording/playback of activation streams
+- Export visualization as video/image
+
+---
+
+## 4. Deliverables & Constraints
 
 1. **The C++ Extension:** Provide the `setup.py` and C++ source to build the module that `import neural_probe` would use
 2. **The Hook Pattern:** Provide the Python snippet showing how to register this C++ probe into `model.register_forward_hook()`
