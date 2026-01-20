@@ -4,6 +4,21 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
+export interface LayerMetadata {
+    layer_id: number;
+    neuron_count?: number;
+    recommended_width?: number;
+    recommended_height?: number;
+}
+
+export interface LayerSummary {
+    layer_id: number;
+    neuron_count?: number;
+    mean?: number;
+    max?: number;
+}
+
+
 export class SceneController {
     private scene: THREE.Scene;
     private camera: THREE.PerspectiveCamera;
@@ -11,16 +26,18 @@ export class SceneController {
     private controls: OrbitControls;
     private composer: EffectComposer;
     private bloomPass: UnrealBloomPass;
-    
-    private layers = new Map<number, THREE.Mesh>();
+
+    private layers = new Map<number, THREE.Object3D>();
     private particles = new Map<number, THREE.Points>(); // Sparse activations
-    
+    private static readonly LAYER_GAP = 2.0;
+
+
     // Theme colors
     private currentTheme = 'magma';
-    private themeColors: any = {
-        magma: { particle: 0xff4500, block: 0x444444 }, // Orange Red
-        matrix: { particle: 0x00ff00, block: 0x003300 }, // Green
-        cyberpunk: { particle: 0x00ffff, block: 0x220033 } // Cyan/Purple
+    private themeColors: Record<string, { particle: number; block: number }> = {
+        magma: { particle: 0xff4500, block: 0x444444 },
+        matrix: { particle: 0x00ff00, block: 0x003300 },
+        cyberpunk: { particle: 0x00ffff, block: 0x220033 }
     };
 
     constructor(canvas: HTMLCanvasElement) {
@@ -40,12 +57,12 @@ export class SceneController {
         const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
         directionalLight.position.set(1, 1, 1);
         this.scene.add(directionalLight);
-        
+
         // Post-processing
         const renderScene = new RenderPass(this.scene, this.camera);
         this.bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
         this.bloomPass.enabled = false;
-        
+
         this.composer = new EffectComposer(this.renderer);
         this.composer.addPass(renderScene);
         this.composer.addPass(this.bloomPass);
@@ -56,19 +73,23 @@ export class SceneController {
     public setBloom(enabled: boolean) {
         this.bloomPass.enabled = enabled;
     }
-    
+
     public setTheme(themeName: string) {
         if (!this.themeColors[themeName]) return;
         this.currentTheme = themeName;
         const colors = this.themeColors[themeName];
-        
+
         this.particles.forEach(p => {
-             (p.material as THREE.PointsMaterial).color.setHex(colors.particle);
+            (p.material as THREE.PointsMaterial).color.setHex(colors.particle);
         });
         this.layers.forEach(l => {
-             (l.material as THREE.MeshBasicMaterial).color.setHex(colors.block);
+            const material = (l as THREE.Mesh | THREE.LineSegments).material;
+            if (material instanceof THREE.MeshBasicMaterial || material instanceof THREE.LineBasicMaterial || material instanceof THREE.PointsMaterial) {
+                material.color.setHex(colors.block);
+            }
         });
     }
+
 
     public resize(width: number, height: number) {
         this.camera.aspect = width / height;
@@ -111,7 +132,8 @@ export class SceneController {
         this.lastTopologyLayerCount = 0;
     }
 
-    public setupTopology(meta: any) {
+    public setupTopology(meta: { layers: LayerMetadata[] | undefined }): void {
+
         const layers = meta?.layers ?? [];
         if (!Array.isArray(layers) || layers.length === 0) {
             return; // don't lock in an empty topology
@@ -125,14 +147,15 @@ export class SceneController {
             this.clearTopology();
         }
 
-        console.log('[Scene] Setting up topology:', meta);
-        
-        const layerGap = 2.0; // Distance between layers
-        
+
+
+
+
         let maxW = 1;
         let maxH = 1;
 
-        layers.forEach((layer: any, layerIndex: number) => {
+        layers.forEach((layer, layerIndex) => {
+
             const neuronCount = Number(layer.neuron_count ?? 0);
             const recW = Number(layer.recommended_width ?? 0);
             const recH = Number(layer.recommended_height ?? 0);
@@ -148,14 +171,14 @@ export class SceneController {
             this.layerTopology.set(layer.layer_id, {
                 width: grid.width,
                 height: grid.height,
-                z: layerIndex * -layerGap // Stack backwards by index (stable)
+                z: layerIndex * -SceneController.LAYER_GAP // Stack backwards by index (stable)
             });
-            
+
             // Create Ghost Plane (Grid Helper)
             const w = grid.width;
             const h = grid.height;
             const spacing = 0.2;
-            
+
             const geometry = new THREE.PlaneGeometry(w * spacing, h * spacing);
             const edges = new THREE.EdgesGeometry(geometry);
             const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({
@@ -163,15 +186,16 @@ export class SceneController {
                 transparent: true,
                 opacity: 0.3
             }));
-            
-            line.position.z = layerIndex * -layerGap;
+
+            line.position.z = layerIndex * -SceneController.LAYER_GAP;
             this.scene.add(line);
             this.ghostLayers.set(layer.layer_id, line);
-            this.layers.set(layer.layer_id, line as any); // for theme updates
+            this.layers.set(layer.layer_id, line); // for theme updates
         });
-        
+
+
         // Auto-Frame Camera
-        const stackDepth = Math.max(1, layers.length - 1) * layerGap;
+        const stackDepth = Math.max(1, layers.length - 1) * SceneController.LAYER_GAP;
         const halfW = (maxW * 0.2) / 2;
         const halfH = (maxH * 0.2) / 2;
         const radius = Math.max(halfW, halfH, stackDepth * 0.5) + 2.0;
@@ -182,12 +206,13 @@ export class SceneController {
         this.camera.updateProjectionMatrix();
         this.camera.position.set(radius * 1.2, radius * 0.8, radius * 1.2);
         this.controls.update();
-        
+
         this.isTopologySetup = true;
         this.lastTopologyLayerCount = layers.length;
     }
 
-    public updateLayers(summaries: any[]) {
+    public updateLayers(summaries: LayerSummary[]): void {
+
         if (!summaries || summaries.length === 0) return;
 
         // If topology exists, color the ghost grids by mean activity for macro readability.
@@ -214,7 +239,6 @@ export class SceneController {
         }
 
         // Fallback: if no topology meta arrived, build a minimal topology from summaries.
-        const layerGap = 2.0;
         const layers = summaries.map((s, i) => ({
             layer_id: Number(s.layer_id),
             neuron_count: Number(s.neuron_count ?? 0),
@@ -225,23 +249,23 @@ export class SceneController {
         this.setupTopology({ layers });
     }
 
-    public updateSparse(sparse: any) {
+    public updateSparse(sparse: { layer_id: number; indices?: number[]; values?: number[] }): void {
         const layerId = sparse.layer_id;
         const topology = this.layerTopology.get(layerId);
         if (!topology) return; // Wait for topology
-        
+
         let pointCloud = this.particles.get(layerId);
-        
+
         // 1. Create Point Cloud if missing
         if (!pointCloud) {
             const geometry = new THREE.BufferGeometry();
             const maxParticles = 4096; // Support full layer
             const positions = new Float32Array(maxParticles * 3);
-            
+
             geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
             geometry.setDrawRange(0, 0);
-            
-            const material = new THREE.PointsMaterial({ 
+
+            const material = new THREE.PointsMaterial({
                 color: this.themeColors[this.currentTheme].particle,
                 size: 0.15,
                 sizeAttenuation: true, // Perspective size
@@ -250,13 +274,13 @@ export class SceneController {
                 blending: THREE.AdditiveBlending,
                 depthWrite: false // Better for transparent overlapping
             });
-            
+
             pointCloud = new THREE.Points(geometry, material);
             pointCloud.position.z = topology.z; // Layer Z
             this.scene.add(pointCloud);
             this.particles.set(layerId, pointCloud);
         }
-        
+
         // 2. Update Particles
         const indices: number[] = Array.isArray(sparse.indices) ? sparse.indices : [];
         const values: number[] = Array.isArray(sparse.values) ? sparse.values : [];
@@ -278,27 +302,27 @@ export class SceneController {
         const width = topology.width;
         const height = topology.height;
         const spacing = 0.2;
-        
+
         // Center offsets
         const offsetX = (width * spacing) / 2;
         const offsetY = (height * spacing) / 2;
 
         for (let i = 0; i < count; i++) {
             const idx = indices[i] ?? 0;
-            
+
             // Grid Mapping
             const col = idx % width;
             const row = Math.floor(idx / width);
-            
+
             const x = (col * spacing) - offsetX;
             const y = (row * spacing) - offsetY; // Inverted Y? row 0 at bottom or top? usually irrelevant for abstract
             // Let's do bottom-up
-            
+
             positions[i * 3] = x;
             positions[i * 3 + 1] = y;
             positions[i * 3 + 2] = 0; // Local z is 0 (relative to parent cloud)
         }
-        
+
         geometry.setDrawRange(0, count);
         (geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
     }
