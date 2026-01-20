@@ -2,11 +2,40 @@ use wasm_bindgen::prelude::*;
 use serde::{Serialize, Deserialize};
 
 // Constants mirroring C++
-pub const NF_MAGIC: u32 = 0x574C464E; // "NFLW"
+pub const NF_MAGIC: u32 = 0x574C464E;
 pub const NF_MSG_LAYER_SUMMARY_BATCH: u16 = 1;
 pub const NF_MSG_SPARSE_ACTIVATIONS: u16 = 2;
 pub const NF_MSG_CONTROL: u16 = 3;
 pub const NF_MSG_MODEL_META: u16 = 4;
+
+pub const NF_FLAG_NONE: u32 = 0;
+pub const NF_FLAG_FP16: u32 = 1u32 << 0;
+pub const NF_FLAG_FP32: u32 = 1u32 << 1;
+pub const NF_FLAG_COMPRESSED: u32 = 1u32 << 2;
+
+pub const NF_OP_SET_THRESHOLD: u32 = 1;
+pub const NF_OP_SET_ACCUMULATION_STEPS: u32 = 2;
+pub const NF_OP_SET_BROADCAST_INTERVAL: u32 = 3;
+pub const NF_OP_SET_MAX_SPARSE_POINTS: u32 = 4;
+
+const HEADER_SIZE: usize = 32;
+const ENTRY_SIZE_LAYER_SUMMARY: usize = 16;
+const ENTRY_SIZE_SPARSE: usize = 8;
+const HEADER_SIZE_LAYER_SUMMARY_BATCH: usize = 8;
+const HEADER_SIZE_SPARSE: usize = 16;
+const HEADER_SIZE_MODEL_META: usize = 4;
+const HEADER_SIZE_LAYER_INFO: usize = 12;
+const HEADER_SIZE_CONTROL: usize = 16;
+
+#[derive(Debug, Clone, Serialize)]
+pub enum ParseError {
+  BufferTooShort,
+  InvalidMagic,
+  PayloadTooShort,
+  PayloadTruncated,
+  UnsupportedMessageType(u16),
+  InvalidVersion(u16),
+}
 
 #[derive(Serialize, Clone)]
 pub struct PacketHeader {
@@ -65,23 +94,60 @@ pub struct ParsedPacket {
     pub meta: Option<ModelMeta>,
 }
 
-pub fn parse_header(data: &[u8]) -> Result<PacketHeader, JsValue> {
-    if data.len() < 32 {
-        return Err(JsValue::from_str("Buffer too short for header"));
+pub fn parse_header(data: &[u8]) -> Result<PacketHeader, ParseError> {
+    if data.len() < HEADER_SIZE {
+        return Err(ParseError::BufferTooShort);
     }
 
-    // Little-endian parsing
-    let magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
+    let magic = u32::from_le_bytes(
+        data[0..4]
+            .try_into()
+            .map_err(|_| ParseError::BufferTooShort)?,
+    );
+
     if magic != NF_MAGIC {
-        return Err(JsValue::from_str("Invalid magic number"));
+        return Err(ParseError::InvalidMagic);
     }
 
-    let version = u16::from_le_bytes(data[4..6].try_into().unwrap());
-    let msg_type = u16::from_le_bytes(data[6..8].try_into().unwrap());
-    let flags = u32::from_le_bytes(data[8..12].try_into().unwrap());
-    let seq = u64::from_le_bytes(data[12..20].try_into().unwrap());
-    let timestamp_ns = u64::from_le_bytes(data[20..28].try_into().unwrap());
-    let payload_bytes = u32::from_le_bytes(data[28..32].try_into().unwrap());
+    let version = u16::from_le_bytes(
+        data[4..6]
+            .try_into()
+            .map_err(|_| ParseError::BufferTooShort)?,
+    );
+
+    if version != 1 {
+        return Err(ParseError::InvalidVersion(version));
+    }
+
+    let msg_type = u16::from_le_bytes(
+        data[6..8]
+            .try_into()
+            .map_err(|_| ParseError::BufferTooShort)?,
+    );
+
+    let flags = u32::from_le_bytes(
+        data[8..12]
+            .try_into()
+            .map_err(|_| ParseError::BufferTooShort)?,
+    );
+
+    let seq = u64::from_le_bytes(
+        data[12..20]
+            .try_into()
+            .map_err(|_| ParseError::BufferTooShort)?,
+    );
+
+    let timestamp_ns = u64::from_le_bytes(
+        data[20..28]
+            .try_into()
+            .map_err(|_| ParseError::BufferTooShort)?,
+    );
+
+    let payload_bytes = u32::from_le_bytes(
+        data[28..32]
+            .try_into()
+            .map_err(|_| ParseError::BufferTooShort)?,
+    );
 
     Ok(PacketHeader {
         magic,
@@ -94,12 +160,12 @@ pub fn parse_header(data: &[u8]) -> Result<PacketHeader, JsValue> {
     })
 }
 
-pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket, JsValue> {
-    // ... setup ...
-    let payload_offset = 32;
+pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket, ParseError> {
+    let payload_offset = HEADER_SIZE;
     let expected_len = payload_offset + header.payload_bytes as usize;
+
     if data.len() < expected_len {
-        return Err(JsValue::from_str("Buffer too short for payload"));
+        return Err(ParseError::PayloadTooShort);
     }
 
     let payload = &data[payload_offset..expected_len];
@@ -108,79 +174,192 @@ pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket,
     let mut control = None;
     let mut meta = None;
 
-    if header.msg_type == NF_MSG_LAYER_SUMMARY_BATCH {
-        // ... parsing logic ...
-        if payload.len() < 8 {
-             return Err(JsValue::from_str("Payload too short for Batch Header"));
-        }
-        let count = u32::from_le_bytes(payload[0..4].try_into().unwrap());
-        
-        let mut list = Vec::with_capacity(count as usize);
-        let entry_size = 16;
-        let start = 8;
-        
-        for i in 0..count {
-            let offset = start + (i as usize * entry_size);
-            if offset + entry_size > payload.len() {
-                break;
+    match header.msg_type {
+        NF_MSG_LAYER_SUMMARY_BATCH => {
+            if payload.len() < HEADER_SIZE_LAYER_SUMMARY_BATCH {
+                return Err(ParseError::PayloadTooShort);
             }
-            let chunk = &payload[offset..offset+entry_size];
-            list.push(LayerSummary {
-                layer_id: u32::from_le_bytes(chunk[0..4].try_into().unwrap()),
-                neuron_count: u32::from_le_bytes(chunk[4..8].try_into().unwrap()),
-                mean: f32::from_le_bytes(chunk[8..12].try_into().unwrap()),
-                max: f32::from_le_bytes(chunk[12..16].try_into().unwrap()),
+
+            let count = u32::from_le_bytes(
+                payload[0..4]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            ) as usize;
+
+            let entry_size = ENTRY_SIZE_LAYER_SUMMARY;
+            let start = HEADER_SIZE_LAYER_SUMMARY_BATCH;
+
+            if payload.len() < start + count * entry_size {
+                return Err(ParseError::PayloadTruncated);
+            }
+
+            let mut list = Vec::with_capacity(count);
+
+            for i in 0..count {
+                let offset = start + i * entry_size;
+                let chunk = &payload[offset..offset + entry_size];
+
+                list.push(LayerSummary {
+                    layer_id: u32::from_le_bytes(
+                        chunk[0..4]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    neuron_count: u32::from_le_bytes(
+                        chunk[4..8]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    mean: f32::from_le_bytes(
+                        chunk[8..12]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    max: f32::from_le_bytes(
+                        chunk[12..16]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                });
+            }
+
+            summaries = Some(list);
+        }
+
+        NF_MSG_SPARSE_ACTIVATIONS => {
+            if payload.len() < HEADER_SIZE_SPARSE {
+                return Err(ParseError::PayloadTooShort);
+            }
+
+            let layer_id = u32::from_le_bytes(
+                payload[0..4]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            );
+
+            let count = u32::from_le_bytes(
+                payload[4..8]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            ) as usize;
+
+            let entry_size = ENTRY_SIZE_SPARSE;
+            let start = HEADER_SIZE_SPARSE;
+
+            if payload.len() < start + count * entry_size {
+                return Err(ParseError::PayloadTruncated);
+            }
+
+            let mut indices = Vec::with_capacity(count);
+            let mut values = Vec::with_capacity(count);
+
+            for i in 0..count {
+                let offset = start + i * entry_size;
+                let chunk = &payload[offset..offset + entry_size];
+
+                indices.push(u32::from_le_bytes(
+                    chunk[0..4]
+                        .try_into()
+                        .map_err(|_| ParseError::PayloadTruncated)?,
+                ));
+                values.push(f32::from_le_bytes(
+                    chunk[4..8]
+                        .try_into()
+                        .map_err(|_| ParseError::PayloadTruncated)?,
+                ));
+            }
+
+            sparse = Some(SparseActivations {
+                layer_id,
+                count: indices.len() as u32,
+                indices,
+                values,
             });
         }
-        summaries = Some(list);
-    } else if header.msg_type == NF_MSG_SPARSE_ACTIVATIONS {
-         if payload.len() < 16 { return Err(JsValue::from_str("Payload too short")); }
-         let layer_id = u32::from_le_bytes(payload[0..4].try_into().unwrap());
-         let count = u32::from_le_bytes(payload[4..8].try_into().unwrap());
-         
-         let entry_size = 8;
-         let start = 16;
-         let mut indices = Vec::with_capacity(count as usize);
-         let mut values = Vec::with_capacity(count as usize);
-         
-         for i in 0..count {
-             let offset = start + (i as usize * entry_size);
-             if offset + entry_size > payload.len() {
-                 break;
-             }
-             let chunk = &payload[offset..offset+entry_size];
-             indices.push(u32::from_le_bytes(chunk[0..4].try_into().unwrap()));
-             values.push(f32::from_le_bytes(chunk[4..8].try_into().unwrap()));
-         }
-         sparse = Some(SparseActivations { layer_id, count: indices.len() as u32, indices, values });
-    } else if header.msg_type == NF_MSG_CONTROL {
-        if payload.len() < 16 { return Err(JsValue::from_str("Control payload too short")); }
-        let opcode = u32::from_le_bytes(payload[0..4].try_into().unwrap());
-        let val_u32 = u32::from_le_bytes(payload[4..8].try_into().unwrap());
-        let val_f32 = f32::from_le_bytes(payload[8..12].try_into().unwrap());
-        control = Some(ControlPacket { opcode, value_u32: val_u32, value_f32: val_f32 });
-    } else if header.msg_type == NF_MSG_MODEL_META {
-        if payload.len() < 4 { return Err(JsValue::from_str("Meta payload too short")); }
-        let total_layers = u32::from_le_bytes(payload[0..4].try_into().unwrap());
-        
-        let entry_size = 12; // 4 + 4 + 2 + 2
-        let start = 4;
-        let mut layers = Vec::with_capacity(total_layers as usize);
-        
-        for i in 0..total_layers {
-            let offset = start + (i as usize * entry_size);
-            if offset + entry_size > payload.len() {
-                break;
+
+        NF_MSG_CONTROL => {
+            if payload.len() < HEADER_SIZE_CONTROL {
+                return Err(ParseError::PayloadTooShort);
             }
-            let chunk = &payload[offset..offset+entry_size];
-            layers.push(LayerInfo {
-                layer_id: u32::from_le_bytes(chunk[0..4].try_into().unwrap()),
-                neuron_count: u32::from_le_bytes(chunk[4..8].try_into().unwrap()),
-                recommended_width: u16::from_le_bytes(chunk[8..10].try_into().unwrap()),
-                recommended_height: u16::from_le_bytes(chunk[10..12].try_into().unwrap()),
+
+            let opcode = u32::from_le_bytes(
+                payload[0..4]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            );
+            let val_u32 = u32::from_le_bytes(
+                payload[4..8]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            );
+            let val_f32 = f32::from_le_bytes(
+                payload[8..12]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            );
+
+            control = Some(ControlPacket {
+                opcode,
+                value_u32: val_u32,
+                value_f32: val_f32,
             });
         }
-        meta = Some(ModelMeta { total_layers: layers.len() as u32, layers });
+
+        NF_MSG_MODEL_META => {
+            if payload.len() < HEADER_SIZE_MODEL_META {
+                return Err(ParseError::PayloadTooShort);
+            }
+
+            let total_layers = u32::from_le_bytes(
+                payload[0..4]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            ) as usize;
+
+            let entry_size = HEADER_SIZE_LAYER_INFO;
+            let start = HEADER_SIZE_MODEL_META;
+
+            if payload.len() < start + total_layers * entry_size {
+                return Err(ParseError::PayloadTruncated);
+            }
+
+            let mut layers = Vec::with_capacity(total_layers);
+
+            for i in 0..total_layers {
+                let offset = start + i * entry_size;
+                let chunk = &payload[offset..offset + entry_size];
+
+                layers.push(LayerInfo {
+                    layer_id: u32::from_le_bytes(
+                        chunk[0..4]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    neuron_count: u32::from_le_bytes(
+                        chunk[4..8]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    recommended_width: u16::from_le_bytes(
+                        chunk[8..10]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    recommended_height: u16::from_le_bytes(
+                        chunk[10..12]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                });
+            }
+
+            meta = Some(ModelMeta {
+                total_layers: layers.len() as u32,
+                layers,
+            });
+        }
+
+        _ => return Err(ParseError::UnsupportedMessageType(header.msg_type)),
     }
 
     Ok(ParsedPacket {
