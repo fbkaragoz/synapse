@@ -1,5 +1,5 @@
+use serde::Serialize;
 use wasm_bindgen::prelude::*;
-use serde::{Serialize, Deserialize};
 
 // Constants mirroring C++
 pub const NF_MAGIC: u32 = 0x574C464E;
@@ -7,6 +7,7 @@ pub const NF_MSG_LAYER_SUMMARY_BATCH: u16 = 1;
 pub const NF_MSG_SPARSE_ACTIVATIONS: u16 = 2;
 pub const NF_MSG_CONTROL: u16 = 3;
 pub const NF_MSG_MODEL_META: u16 = 4;
+pub const NF_MSG_GRADIENT_BATCH: u16 = 5;
 
 pub const NF_FLAG_NONE: u32 = 0;
 pub const NF_FLAG_FP16: u32 = 1u32 << 0;
@@ -26,6 +27,8 @@ const HEADER_SIZE_SPARSE: usize = 16;
 const HEADER_SIZE_MODEL_META: usize = 4;
 const HEADER_SIZE_LAYER_INFO: usize = 12;
 const HEADER_SIZE_CONTROL: usize = 16;
+const HEADER_SIZE_GRADIENT_BATCH: usize = 12;
+const ENTRY_SIZE_GRADIENT_SUMMARY: usize = 36;
 
 #[derive(Debug, Clone, Serialize)]
 pub enum ParseError {
@@ -86,12 +89,33 @@ pub struct ModelMeta {
 }
 
 #[derive(Serialize)]
+pub struct GradientSummary {
+    pub layer_id: u32,
+    pub param_count: u32,
+    pub grad_mean: f32,
+    pub grad_std: f32,
+    pub grad_min: f32,
+    pub grad_max: f32,
+    pub grad_l2_norm: f32,
+    pub weight_l2_norm: f32,
+    pub grad_to_weight: f32,
+}
+
+#[derive(Serialize)]
+pub struct GradientBatch {
+    pub training_step: u32,
+    pub global_grad_norm: f32,
+    pub gradients: Vec<GradientSummary>,
+}
+
+#[derive(Serialize)]
 pub struct ParsedPacket {
     pub header: PacketHeader,
     pub summaries: Option<Vec<LayerSummary>>,
     pub sparse: Option<SparseActivations>,
     pub control: Option<ControlPacket>,
     pub meta: Option<ModelMeta>,
+    pub gradients: Option<GradientBatch>,
 }
 
 pub fn parse_header(data: &[u8]) -> Result<PacketHeader, ParseError> {
@@ -173,6 +197,7 @@ pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket,
     let mut sparse = None;
     let mut control = None;
     let mut meta = None;
+    let mut gradients = None;
 
     match header.msg_type {
         NF_MSG_LAYER_SUMMARY_BATCH => {
@@ -225,7 +250,6 @@ pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket,
 
             summaries = Some(list);
         }
-
         NF_MSG_SPARSE_ACTIVATIONS => {
             if payload.len() < HEADER_SIZE_SPARSE {
                 return Err(ParseError::PayloadTooShort);
@@ -276,7 +300,6 @@ pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket,
                 values,
             });
         }
-
         NF_MSG_CONTROL => {
             if payload.len() < HEADER_SIZE_CONTROL {
                 return Err(ParseError::PayloadTooShort);
@@ -304,7 +327,6 @@ pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket,
                 value_f32: val_f32,
             });
         }
-
         NF_MSG_MODEL_META => {
             if payload.len() < HEADER_SIZE_MODEL_META {
                 return Err(ParseError::PayloadTooShort);
@@ -358,7 +380,95 @@ pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket,
                 layers,
             });
         }
+        NF_MSG_GRADIENT_BATCH => {
+            if payload.len() < HEADER_SIZE_GRADIENT_BATCH {
+                return Err(ParseError::PayloadTooShort);
+            }
 
+            let count = u32::from_le_bytes(
+                payload[0..4]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            ) as usize;
+            let training_step = u32::from_le_bytes(
+                payload[4..8]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            );
+            let global_grad_norm = f32::from_le_bytes(
+                payload[8..12]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            );
+
+            let start = HEADER_SIZE_GRADIENT_BATCH;
+            let entry_size = ENTRY_SIZE_GRADIENT_SUMMARY;
+
+            if payload.len() < start + count * entry_size {
+                return Err(ParseError::PayloadTruncated);
+            }
+
+            let mut grad_list = Vec::with_capacity(count);
+
+            for i in 0..count {
+                let offset = start + i * entry_size;
+                let chunk = &payload[offset..offset + entry_size];
+
+                grad_list.push(GradientSummary {
+                    layer_id: u32::from_le_bytes(
+                        chunk[0..4]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    param_count: u32::from_le_bytes(
+                        chunk[4..8]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    grad_mean: f32::from_le_bytes(
+                        chunk[8..12]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    grad_std: f32::from_le_bytes(
+                        chunk[12..16]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    grad_min: f32::from_le_bytes(
+                        chunk[16..20]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    grad_max: f32::from_le_bytes(
+                        chunk[20..24]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    grad_l2_norm: f32::from_le_bytes(
+                        chunk[24..28]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    weight_l2_norm: f32::from_le_bytes(
+                        chunk[28..32]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    grad_to_weight: f32::from_le_bytes(
+                        chunk[32..36]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                });
+            }
+
+            gradients = Some(GradientBatch {
+                training_step,
+                global_grad_norm,
+                gradients: grad_list,
+            });
+        }
         _ => return Err(ParseError::UnsupportedMessageType(header.msg_type)),
     }
 
@@ -368,5 +478,6 @@ pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket,
         sparse,
         control,
         meta,
+        gradients,
     })
 }

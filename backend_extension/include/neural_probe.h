@@ -22,4 +22,11 @@ std::vector<uint8_t> get_model_meta_packet();
 
 NF_Result log_activation(int layer_id, py::array_t<float> tensor);
 
+NF_Result log_gradient(int layer_id, py::array_t<float> grad, py::array_t<float> weight);
+
+void flush_gradient_batch();
+
+void set_training_step(uint64_t step);
+uint64_t get_training_step();
+
 #endif

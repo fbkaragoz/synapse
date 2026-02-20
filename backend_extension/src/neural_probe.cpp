@@ -304,3 +304,139 @@ NF_Result log_activation(int layer_id, py::array_t<float> tensor) {
     
     return NF_OK;
 }
+
+static std::atomic<uint64_t> g_training_step{0};
+
+void set_training_step(uint64_t step) {
+    g_training_step = step;
+}
+
+uint64_t get_training_step() {
+    return g_training_step.load();
+}
+
+static std::vector<NF_GradientSummaryV1> g_pending_gradients;
+static std::mutex g_gradient_mutex;
+static std::atomic<float> g_global_grad_norm{0.0f};
+static std::atomic<int> g_gradient_count{0};
+
+NF_Result log_gradient(int layer_id, py::array_t<float> grad, py::array_t<float> weight) {
+    if (!g_buffer) return NF_ERR_NOT_STARTED;
+    
+    py::buffer_info grad_buf = grad.request();
+    py::buffer_info weight_buf = weight.request();
+    
+    if (grad_buf.ndim < 1 || grad_buf.ndim > 2) {
+        return NF_ERR_INVALID_DIMS;
+    }
+    if (weight_buf.ndim < 1 || weight_buf.ndim > 2) {
+        return NF_ERR_INVALID_DIMS;
+    }
+    if (grad_buf.ptr == nullptr || weight_buf.ptr == nullptr) {
+        return NF_ERR_NULL_POINTER;
+    }
+    
+    float* grad_ptr = static_cast<float*>(grad_buf.ptr);
+    float* weight_ptr = static_cast<float*>(weight_buf.ptr);
+    size_t grad_size = grad_buf.size;
+    size_t weight_size = weight_buf.size;
+    
+    double grad_sum = 0.0;
+    double grad_sum_sq = 0.0;
+    float grad_min = grad_ptr[0];
+    float grad_max = grad_ptr[0];
+    
+    for (size_t i = 0; i < grad_size; ++i) {
+        float v = grad_ptr[i];
+        grad_sum += v;
+        grad_sum_sq += static_cast<double>(v) * v;
+        if (v < grad_min) grad_min = v;
+        if (v > grad_max) grad_max = v;
+    }
+    
+    float grad_mean = static_cast<float>(grad_sum / grad_size);
+    float grad_l2_norm = static_cast<float>(std::sqrt(grad_sum_sq));
+    
+    double grad_var = 0.0;
+    for (size_t i = 0; i < grad_size; ++i) {
+        double diff = grad_ptr[i] - grad_mean;
+        grad_var += diff * diff;
+    }
+    float grad_std = static_cast<float>(std::sqrt(grad_var / grad_size));
+    
+    double weight_sum_sq = 0.0;
+    for (size_t i = 0; i < weight_size; ++i) {
+        weight_sum_sq += static_cast<double>(weight_ptr[i]) * weight_ptr[i];
+    }
+    float weight_l2_norm = static_cast<float>(std::sqrt(weight_sum_sq));
+    
+    float grad_to_weight = (weight_l2_norm > 1e-10f) ? (grad_l2_norm / weight_l2_norm) : 0.0f;
+    
+    NF_GradientSummaryV1 summary;
+    summary.layer_id = static_cast<uint32_t>(layer_id);
+    summary.param_count = static_cast<uint32_t>(grad_size);
+    summary.grad_mean = grad_mean;
+    summary.grad_std = grad_std;
+    summary.grad_min = grad_min;
+    summary.grad_max = grad_max;
+    summary.grad_l2_norm = grad_l2_norm;
+    summary.weight_l2_norm = weight_l2_norm;
+    summary.grad_to_weight = grad_to_weight;
+    
+    {
+        std::lock_guard<std::mutex> lock(g_gradient_mutex);
+        g_pending_gradients.push_back(summary);
+        
+        float old_norm = g_global_grad_norm.load();
+        float new_norm = std::sqrt(old_norm * old_norm + grad_l2_norm * grad_l2_norm);
+        g_global_grad_norm = new_norm;
+        g_gradient_count++;
+    }
+    
+    return NF_OK;
+}
+
+void flush_gradient_batch() {
+    if (!g_buffer) return;
+    
+    std::vector<NF_GradientSummaryV1> gradients;
+    float global_norm;
+    uint32_t count;
+    
+    {
+        std::lock_guard<std::mutex> lock(g_gradient_mutex);
+        gradients = std::move(g_pending_gradients);
+        g_pending_gradients.clear();
+        global_norm = g_global_grad_norm.exchange(0.0f);
+        count = static_cast<uint32_t>(g_gradient_count.exchange(0));
+    }
+    
+    if (gradients.empty()) return;
+    
+    size_t payload_size = sizeof(NF_GradientBatchV1) + gradients.size() * sizeof(NF_GradientSummaryV1);
+    size_t total_size = sizeof(NF_PacketHeader) + payload_size;
+    
+    std::vector<uint8_t> packet(total_size);
+    uint8_t* raw = packet.data();
+    
+    NF_PacketHeader* hdr = reinterpret_cast<NF_PacketHeader*>(raw);
+    hdr->magic = 0x574C464E;
+    hdr->version = 1;
+    hdr->msg_type = NF_MSG_GRADIENT_BATCH;
+    hdr->flags = NF_FLAG_FP32;
+    hdr->seq = g_seq++;
+    auto now = std::chrono::steady_clock::now();
+    hdr->timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+    hdr->payload_bytes = static_cast<uint32_t>(payload_size);
+    
+    uint8_t* payload_ptr = raw + sizeof(NF_PacketHeader);
+    NF_GradientBatchV1* batch = reinterpret_cast<NF_GradientBatchV1*>(payload_ptr);
+    batch->count = static_cast<uint32_t>(gradients.size());
+    batch->training_step = static_cast<uint32_t>(g_training_step.load());
+    batch->global_grad_norm = global_norm;
+    
+    NF_GradientSummaryV1* summaries = reinterpret_cast<NF_GradientSummaryV1*>(payload_ptr + sizeof(NF_GradientBatchV1));
+    std::memcpy(summaries, gradients.data(), gradients.size() * sizeof(NF_GradientSummaryV1));
+    
+    g_buffer->push(std::move(packet));
+}

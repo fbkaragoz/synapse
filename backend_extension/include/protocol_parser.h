@@ -299,6 +299,128 @@ inline std::vector<uint8_t> build_control_packet(
     return build_packet(NF_MSG_CONTROL, 0, seq, timestamp_ns, payload, 16);
 }
 
+struct ParsedGradientSummary {
+    uint32_t layer_id;
+    uint32_t param_count;
+    float grad_mean;
+    float grad_std;
+    float grad_min;
+    float grad_max;
+    float grad_l2_norm;
+    float weight_l2_norm;
+    float grad_to_weight;
+};
+
+struct ParsedGradientBatch {
+    uint32_t training_step;
+    float global_grad_norm;
+    std::vector<ParsedGradientSummary> gradients;
+};
+
+inline ParseResult parse_gradient_batch(const uint8_t* payload, size_t payload_len, ParsedGradientBatch& out) {
+    if (payload_len < 12) {
+        return ParseResult::ERR_BUFFER_TOO_SHORT;
+    }
+    
+    uint32_t count = *reinterpret_cast<const uint32_t*>(payload);
+    out.training_step = *reinterpret_cast<const uint32_t*>(payload + 4);
+    out.global_grad_norm = *reinterpret_cast<const float*>(payload + 8);
+    
+    const size_t entry_size = 36;
+    const size_t required_size = 12 + (count * entry_size);
+    if (payload_len < required_size) {
+        return ParseResult::ERR_TRUNCATED_PAYLOAD;
+    }
+    
+    out.gradients.resize(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint8_t* entry = payload + 12 + (i * entry_size);
+        ParsedGradientSummary& s = out.gradients[i];
+        s.layer_id = *reinterpret_cast<const uint32_t*>(entry);
+        s.param_count = *reinterpret_cast<const uint32_t*>(entry + 4);
+        s.grad_mean = *reinterpret_cast<const float*>(entry + 8);
+        s.grad_std = *reinterpret_cast<const float*>(entry + 12);
+        s.grad_min = *reinterpret_cast<const float*>(entry + 16);
+        s.grad_max = *reinterpret_cast<const float*>(entry + 20);
+        s.grad_l2_norm = *reinterpret_cast<const float*>(entry + 24);
+        s.weight_l2_norm = *reinterpret_cast<const float*>(entry + 28);
+        s.grad_to_weight = *reinterpret_cast<const float*>(entry + 32);
+    }
+    
+    return ParseResult::OK;
+}
+
+struct GradientStats {
+    float mean;
+    float std;
+    float min;
+    float max;
+    float l2_norm;
+};
+
+inline void compute_gradient_stats(const float* data, size_t count, GradientStats& out) {
+    if (count == 0) {
+        out = {};
+        return;
+    }
+    
+    double sum = 0.0;
+    out.min = data[0];
+    out.max = data[0];
+    double sum_sq = 0.0;
+    
+    for (size_t i = 0; i < count; ++i) {
+        float v = data[i];
+        sum += v;
+        sum_sq += static_cast<double>(v) * v;
+        if (v < out.min) out.min = v;
+        if (v > out.max) out.max = v;
+    }
+    
+    out.mean = static_cast<float>(sum / count);
+    out.l2_norm = static_cast<float>(std::sqrt(sum_sq));
+    
+    double variance = 0.0;
+    for (size_t i = 0; i < count; ++i) {
+        double diff = data[i] - out.mean;
+        variance += diff * diff;
+    }
+    variance /= count;
+    out.std = static_cast<float>(std::sqrt(variance));
+}
+
+inline std::vector<uint8_t> build_gradient_batch_packet(
+    const std::vector<ParsedGradientSummary>& gradients,
+    uint32_t training_step,
+    float global_grad_norm,
+    uint64_t seq = 0,
+    uint64_t timestamp_ns = 0
+) {
+    const size_t payload_size = 12 + gradients.size() * 36;
+    std::vector<uint8_t> payload(payload_size);
+    
+    *reinterpret_cast<uint32_t*>(payload.data()) = static_cast<uint32_t>(gradients.size());
+    *reinterpret_cast<uint32_t*>(payload.data() + 4) = training_step;
+    *reinterpret_cast<float*>(payload.data() + 8) = global_grad_norm;
+    
+    for (size_t i = 0; i < gradients.size(); ++i) {
+        uint8_t* entry = payload.data() + 12 + i * 36;
+        const ParsedGradientSummary& s = gradients[i];
+        *reinterpret_cast<uint32_t*>(entry) = s.layer_id;
+        *reinterpret_cast<uint32_t*>(entry + 4) = s.param_count;
+        *reinterpret_cast<float*>(entry + 8) = s.grad_mean;
+        *reinterpret_cast<float*>(entry + 12) = s.grad_std;
+        *reinterpret_cast<float*>(entry + 16) = s.grad_min;
+        *reinterpret_cast<float*>(entry + 20) = s.grad_max;
+        *reinterpret_cast<float*>(entry + 24) = s.grad_l2_norm;
+        *reinterpret_cast<float*>(entry + 28) = s.weight_l2_norm;
+        *reinterpret_cast<float*>(entry + 32) = s.grad_to_weight;
+    }
+    
+    return build_packet(NF_MSG_GRADIENT_BATCH, NF_FLAG_FP32, seq, timestamp_ns,
+                        payload.data(), static_cast<uint32_t>(payload_size));
+}
+
 }
 
 #endif

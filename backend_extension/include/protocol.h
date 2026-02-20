@@ -22,6 +22,7 @@ enum NF_MsgType : uint16_t {
   NF_MSG_SPARSE_ACTIVATIONS  = 2,   // micro LOD
   NF_MSG_CONTROL             = 3,   // frontend->backend config
   NF_MSG_MODEL_META          = 4,   // topology
+  NF_MSG_GRADIENT_BATCH      = 5,   // gradient statistics
 };
 
 enum NF_Flags : uint32_t {
@@ -105,4 +106,26 @@ struct __attribute__((packed)) NF_ModelMetaPacket {
     // Followed by NF_LayerInfo layers[total_layers]
 };
 
-#endif // PROTOCOL_H
+// -------------------------------------------------------------
+// Gradient Batch (backward pass statistics)
+// -------------------------------------------------------------
+struct __attribute__((packed)) NF_GradientSummaryV1 {
+  uint32_t layer_id;
+  uint32_t param_count;       // number of parameters aggregated
+  float    grad_mean;
+  float    grad_std;
+  float    grad_min;
+  float    grad_max;
+  float    grad_l2_norm;      // ||∇L||
+  float    weight_l2_norm;    // ||W||
+  float    grad_to_weight;    // ||∇L|| / ||W|| - update magnitude
+};
+
+struct __attribute__((packed)) NF_GradientBatchV1 {
+  uint32_t count;             // number of gradient summaries
+  uint32_t training_step;     // global step counter
+  float    global_grad_norm;  // total gradient norm (after clipping)
+  // Followed by NF_GradientSummaryV1 gradients[count]
+};
+
+#endif

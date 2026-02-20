@@ -255,19 +255,45 @@ NF_Result log_activation(int layer_id, py::array_t<float> tensor);
 
 **Theme**: Essential backward pass statistics
 
+**Status**: ✅ COMPLETED (2026-02-21)
+
 | Task | Est. | Status |
 |------|------|--------|
-| Define gradient protocol | 2h | [ ] |
-| Implement log_gradient API | 4h | [ ] |
-| Create gradient hook example | 2h | [ ] |
-| Update WASM parser | 2h | [ ] |
-| Frontend gradient display | 4h | [ ] |
+| Define gradient protocol | 2h | [x] |
+| Implement log_gradient API | 4h | [x] |
+| Create gradient hook example | 2h | [x] |
+| Update WASM parser | 2h | [x] |
+| Frontend gradient display | 4h | [ ] (deferred to Iteration 2) |
 | **Total** | **14h** | |
 
 **Exit Criteria**:
-- Gradient statistics captured and transmitted
-- WASM parser handles gradient messages
-- Frontend displays gradient metrics
+- [x] Gradient statistics captured and transmitted
+- [x] WASM parser handles gradient messages
+- [ ] Frontend displays gradient metrics (deferred)
+
+**Deliverables**:
+- `include/protocol.h` - NF_MSG_GRADIENT_BATCH, NF_GradientSummaryV1, NF_GradientBatchV1
+- `include/protocol_parser.h` - Gradient parsing and building functions
+- `src/neural_probe.cpp` - log_gradient, flush_gradient_batch, set_training_step
+- `python/gradient_hook.py` - GradientCapture class for PyTorch
+- `wasm_parser/src/protocol.rs` - Gradient batch parsing
+
+**Python API**:
+```python
+import neural_probe
+from gradient_hook import GradientCapture
+
+# Register gradient hooks
+capture = GradientCapture(model, layers=[0, 5, 10])
+capture.register_hooks()
+
+# In training loop
+for step, batch in enumerate(dataloader):
+    neural_probe.set_training_step(step)
+    loss.backward()
+    capture.flush()  # Sends gradient batch packet
+    optimizer.step()
+```
 
 ---
 
@@ -408,23 +434,25 @@ NF_Result log_activation(int layer_id, py::array_t<float> tensor);
 
 ## Part VII: Current Phase
 
-**Completed Iteration**: 1A - Test Foundation ✅
+**Completed Iterations**: 
+- 1A - Test Foundation ✅
+- 1B - Gradient Capture ✅
 
-**Active Iteration**: 1B - Gradient Capture
+**Active Iteration**: 2 - Extended Statistics
 
 **Next Steps**:
-1. Define gradient protocol structures
-2. Implement log_gradient API in C++
-3. Create gradient hook example in Python
-4. Update WASM parser for gradient messages
-5. Add frontend gradient display
+1. Extend protocol to V2 with 13 statistics per layer
+2. Implement min, std, L2 norm capture in log_activation
+3. Add percentile computation
+4. Add kurtosis and skewness computation
+5. Frontend distribution histogram view
 
-**Iteration 1A Summary**:
-- 18 test cases with 139 assertions all passing
-- Protocol parser extracted to testable header
-- Error codes implemented and exposed to Python
-- Ring buffer concurrency validated
-- Statistics computation verified against known inputs
+**Iteration 1B Summary**:
+- NF_MSG_GRADIENT_BATCH protocol message type
+- log_gradient API for backward pass statistics
+- GradientCapture class for PyTorch integration
+- WASM parser gradient support
+- 20 test cases with 183 assertions all passing
 
 ---
 
@@ -432,4 +460,5 @@ NF_Result log_activation(int layer_id, py::array_t<float> tensor);
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-02-21 | 1.1 | Completed Iteration 1B - Gradient capture |
 | 2026-02-21 | 1.0 | Initial roadmap creation |

@@ -40,4 +40,19 @@ PYBIND11_MODULE(neural_probe, m) {
     m.def("log_activation", &log_activation, "Log a tensor activation for a specific layer",
           py::arg("layer_id"),
           py::arg("tensor"));
+
+    m.def("log_gradient", &log_gradient, "Log gradient statistics for a layer",
+          py::arg("layer_id"),
+          py::arg("grad"),
+          py::arg("weight"));
+
+    m.def("flush_gradient_batch", &flush_gradient_batch, 
+          "Flush pending gradient statistics as a batch packet");
+
+    m.def("set_training_step", &set_training_step,
+          "Set the current training step counter",
+          py::arg("step"));
+
+    m.def("get_training_step", &get_training_step,
+          "Get the current training step counter");
 }
