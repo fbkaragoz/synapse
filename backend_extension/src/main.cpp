@@ -55,4 +55,11 @@ PYBIND11_MODULE(neural_probe, m) {
 
     m.def("get_training_step", &get_training_step,
           "Get the current training step counter");
+
+    m.def("set_use_v2", &set_use_v2,
+          "Enable or disable V2 extended statistics (13 metrics)",
+          py::arg("use_v2"));
+
+    m.def("get_use_v2", &get_use_v2,
+          "Check if V2 extended statistics mode is enabled");
 }

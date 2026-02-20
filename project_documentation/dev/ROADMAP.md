@@ -301,19 +301,47 @@ for step, batch in enumerate(dataloader):
 
 **Theme**: Analytical diagnostic capability
 
+**Status**: ✅ COMPLETED (2026-02-21)
+
 | Task | Est. | Status |
 |------|------|--------|
-| Protocol V2 extension | 2h | [ ] |
-| Min, std, L2 norm capture | 3h | [ ] |
-| Percentile computation | 3h | [ ] |
-| Kurtosis, skewness | 3h | [ ] |
-| Frontend distribution view | 4h | [ ] |
+| Protocol V2 extension | 2h | [x] |
+| Min, std, L2 norm capture | 3h | [x] |
+| Percentile computation | 3h | [x] |
+| Kurtosis, skewness | 3h | [x] |
+| Frontend distribution view | 4h | [ ] (deferred) |
 | **Total** | **15h** | |
 
 **Exit Criteria**:
-- All 13 statistics captured per layer
-- Protocol V2 backward compatible
-- Distribution visualization working
+- [x] All 13 statistics captured per layer
+- [x] Protocol V2 backward compatible
+- [ ] Distribution visualization working (deferred)
+
+**Deliverables**:
+- `include/protocol.h` - NF_MSG_LAYER_SUMMARY_BATCH_V2, NF_LayerSummaryV2 (64 bytes)
+- `include/protocol_parser.h` - V2 parsing/building, statistics_to_v2_summary helper
+- `src/neural_probe.cpp` - Extended statistics in log_activation, set_use_v2/get_use_v2
+- `wasm_parser/src/protocol.rs` - LayerSummaryV2 struct and parsing
+
+**New Python API**:
+```python
+import neural_probe
+
+# Enable V2 mode (default: True)
+neural_probe.set_use_v2(True)
+
+# log_activation now sends 13 statistics:
+# mean, std, min, max, l2_norm, zero_ratio, p5, p25, p75, p95, kurtosis, skewness, flags
+result = neural_probe.log_activation(layer_id, tensor)
+```
+
+**Protocol V2 Summary (64 bytes)**:
+```
+layer_id (4) | neuron_count (4) | mean (4) | std (4)
+min (4) | max (4) | l2_norm (4) | zero_ratio (4)
+p5 (4) | p25 (4) | p75 (4) | p95 (4)
+kurtosis (4) | skewness (4) | flags (4) | reserved (4)
+```
 
 ---
 
@@ -437,22 +465,24 @@ for step, batch in enumerate(dataloader):
 **Completed Iterations**: 
 - 1A - Test Foundation ✅
 - 1B - Gradient Capture ✅
+- 2 - Extended Statistics ✅
 
-**Active Iteration**: 2 - Extended Statistics
+**Active Iteration**: 3 - Accumulation & Layer Selection
 
 **Next Steps**:
-1. Extend protocol to V2 with 13 statistics per layer
-2. Implement min, std, L2 norm capture in log_activation
-3. Add percentile computation
-4. Add kurtosis and skewness computation
-5. Frontend distribution histogram view
+1. Implement Welford accumulation for online statistics
+2. Wire accum_steps to log_activation
+3. Add layer selection protocol (whitelist/blacklist)
+4. Add sampling rate control
+5. Frontend layer selection UI
 
-**Iteration 1B Summary**:
-- NF_MSG_GRADIENT_BATCH protocol message type
-- log_gradient API for backward pass statistics
-- GradientCapture class for PyTorch integration
-- WASM parser gradient support
-- 20 test cases with 183 assertions all passing
+**Iteration 2 Summary**:
+- NF_MSG_LAYER_SUMMARY_BATCH_V2 (64 bytes per entry)
+- 13 statistics: mean, std, min, max, l2_norm, zero_ratio, p5, p25, p75, p95, kurtosis, skewness, flags
+- Automatic flag detection for dead/exploding layers
+- set_use_v2/get_use_v2 API for backward compatibility
+- WASM parser V2 support
+- 21 test cases with 220 assertions all passing
 
 ---
 
@@ -460,5 +490,6 @@ for step, batch in enumerate(dataloader):
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-02-21 | 1.2 | Completed Iteration 2 - Extended statistics |
 | 2026-02-21 | 1.1 | Completed Iteration 1B - Gradient capture |
 | 2026-02-21 | 1.0 | Initial roadmap creation |

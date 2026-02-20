@@ -18,11 +18,20 @@ enum NF_Result : uint32_t {
 // For standard types (u32, u64), alignment usually works out, but effectively we treat the wire format as byte-packed.
 
 enum NF_MsgType : uint16_t {
-  NF_MSG_LAYER_SUMMARY_BATCH = 1,   // macro LOD
-  NF_MSG_SPARSE_ACTIVATIONS  = 2,   // micro LOD
-  NF_MSG_CONTROL             = 3,   // frontend->backend config
-  NF_MSG_MODEL_META          = 4,   // topology
-  NF_MSG_GRADIENT_BATCH      = 5,   // gradient statistics
+  NF_MSG_LAYER_SUMMARY_BATCH    = 1,   // macro LOD (V1)
+  NF_MSG_SPARSE_ACTIVATIONS     = 2,   // micro LOD
+  NF_MSG_CONTROL                = 3,   // frontend->backend config
+  NF_MSG_MODEL_META             = 4,   // topology
+  NF_MSG_GRADIENT_BATCH         = 5,   // gradient statistics
+  NF_MSG_LAYER_SUMMARY_BATCH_V2 = 6,   // extended statistics (64 bytes each)
+};
+
+enum NF_LayerFlags : uint32_t {
+  NF_LAYER_FLAG_NONE       = 0,
+  NF_LAYER_FLAG_SATURATED  = 1u << 0,  // Many values at bounds
+  NF_LAYER_FLAG_DEAD       = 1u << 1,  // High zero ratio
+  NF_LAYER_FLAG_EXPLODING  = 1u << 2,  // Extreme max/mean ratio
+  NF_LAYER_FLAG_ANOMALY    = 1u << 3,  // Statistical anomaly detected
 };
 
 enum NF_Flags : uint32_t {
@@ -55,6 +64,32 @@ struct __attribute__((packed)) NF_LayerSummaryBatchV1 {
   uint32_t count;        // number of summaries that follow
   uint32_t reserved;     // 0
   // NF_LayerSummaryV1 summaries[count];
+};
+
+// Extended Layer Summary V2 (64 bytes) - 13 statistics per layer
+struct __attribute__((packed)) NF_LayerSummaryV2 {
+  uint32_t layer_id;        // 0-3
+  uint32_t neuron_count;    // 4-7
+  float    mean;            // 8-11
+  float    std;             // 12-15
+  float    min;             // 16-19
+  float    max;             // 20-23
+  float    l2_norm;         // 24-27
+  float    zero_ratio;      // 28-31
+  float    p5;              // 32-35
+  float    p25;             // 36-39
+  float    p75;             // 40-43
+  float    p95;             // 44-47
+  float    kurtosis;        // 48-51
+  float    skewness;        // 52-55
+  uint32_t flags;           // 56-59 (NF_LayerFlags)
+  uint32_t reserved;        // 60-63
+};
+
+struct __attribute__((packed)) NF_LayerSummaryBatchV2 {
+  uint32_t count;        // number of summaries that follow
+  uint32_t version;      // always 2
+  // NF_LayerSummaryV2 summaries[count];
 };
 
 // Payload: Sparse Activations (micro LOD)

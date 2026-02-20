@@ -98,6 +98,65 @@ inline ParseResult parse_layer_summary_batch(const uint8_t* payload, size_t payl
     return ParseResult::OK;
 }
 
+struct ParsedLayerSummaryV2 {
+    uint32_t layer_id;
+    uint32_t neuron_count;
+    float mean;
+    float std;
+    float min;
+    float max;
+    float l2_norm;
+    float zero_ratio;
+    float p5;
+    float p25;
+    float p75;
+    float p95;
+    float kurtosis;
+    float skewness;
+    uint32_t flags;
+};
+
+struct ParsedLayerSummaryBatchV2 {
+    std::vector<ParsedLayerSummaryV2> summaries;
+};
+
+inline ParseResult parse_layer_summary_batch_v2(const uint8_t* payload, size_t payload_len, ParsedLayerSummaryBatchV2& out) {
+    if (payload_len < 8) {
+        return ParseResult::ERR_BUFFER_TOO_SHORT;
+    }
+    
+    uint32_t count = *reinterpret_cast<const uint32_t*>(payload);
+    
+    const size_t entry_size = 64;
+    const size_t required_size = 8 + (count * entry_size);
+    if (payload_len < required_size) {
+        return ParseResult::ERR_TRUNCATED_PAYLOAD;
+    }
+    
+    out.summaries.resize(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint8_t* entry = payload + 8 + (i * entry_size);
+        ParsedLayerSummaryV2& s = out.summaries[i];
+        s.layer_id = *reinterpret_cast<const uint32_t*>(entry);
+        s.neuron_count = *reinterpret_cast<const uint32_t*>(entry + 4);
+        s.mean = *reinterpret_cast<const float*>(entry + 8);
+        s.std = *reinterpret_cast<const float*>(entry + 12);
+        s.min = *reinterpret_cast<const float*>(entry + 16);
+        s.max = *reinterpret_cast<const float*>(entry + 20);
+        s.l2_norm = *reinterpret_cast<const float*>(entry + 24);
+        s.zero_ratio = *reinterpret_cast<const float*>(entry + 28);
+        s.p5 = *reinterpret_cast<const float*>(entry + 32);
+        s.p25 = *reinterpret_cast<const float*>(entry + 36);
+        s.p75 = *reinterpret_cast<const float*>(entry + 40);
+        s.p95 = *reinterpret_cast<const float*>(entry + 44);
+        s.kurtosis = *reinterpret_cast<const float*>(entry + 48);
+        s.skewness = *reinterpret_cast<const float*>(entry + 52);
+        s.flags = *reinterpret_cast<const uint32_t*>(entry + 56);
+    }
+    
+    return ParseResult::OK;
+}
+
 struct ParsedSparseActivation {
     uint32_t layer_id;
     std::vector<uint32_t> indices;
@@ -281,6 +340,70 @@ inline std::vector<uint8_t> build_layer_summary_packet(
     
     return build_packet(NF_MSG_LAYER_SUMMARY_BATCH, NF_FLAG_FP32, seq, timestamp_ns, 
                         payload.data(), static_cast<uint32_t>(payload_size));
+}
+
+inline std::vector<uint8_t> build_layer_summary_packet_v2(
+    const std::vector<ParsedLayerSummaryV2>& summaries,
+    uint64_t seq = 0,
+    uint64_t timestamp_ns = 0
+) {
+    const size_t payload_size = 8 + summaries.size() * 64;
+    std::vector<uint8_t> payload(payload_size);
+    
+    *reinterpret_cast<uint32_t*>(payload.data()) = static_cast<uint32_t>(summaries.size());
+    *reinterpret_cast<uint32_t*>(payload.data() + 4) = 2;  // version
+    
+    for (size_t i = 0; i < summaries.size(); ++i) {
+        uint8_t* entry = payload.data() + 8 + i * 64;
+        const ParsedLayerSummaryV2& s = summaries[i];
+        *reinterpret_cast<uint32_t*>(entry) = s.layer_id;
+        *reinterpret_cast<uint32_t*>(entry + 4) = s.neuron_count;
+        *reinterpret_cast<float*>(entry + 8) = s.mean;
+        *reinterpret_cast<float*>(entry + 12) = s.std;
+        *reinterpret_cast<float*>(entry + 16) = s.min;
+        *reinterpret_cast<float*>(entry + 20) = s.max;
+        *reinterpret_cast<float*>(entry + 24) = s.l2_norm;
+        *reinterpret_cast<float*>(entry + 28) = s.zero_ratio;
+        *reinterpret_cast<float*>(entry + 32) = s.p5;
+        *reinterpret_cast<float*>(entry + 36) = s.p25;
+        *reinterpret_cast<float*>(entry + 40) = s.p75;
+        *reinterpret_cast<float*>(entry + 44) = s.p95;
+        *reinterpret_cast<float*>(entry + 48) = s.kurtosis;
+        *reinterpret_cast<float*>(entry + 52) = s.skewness;
+        *reinterpret_cast<uint32_t*>(entry + 56) = s.flags;
+        *reinterpret_cast<uint32_t*>(entry + 60) = 0;  // reserved
+    }
+    
+    return build_packet(NF_MSG_LAYER_SUMMARY_BATCH_V2, NF_FLAG_FP32, seq, timestamp_ns,
+                        payload.data(), static_cast<uint32_t>(payload_size));
+}
+
+inline ParsedLayerSummaryV2 statistics_to_v2_summary(
+    uint32_t layer_id,
+    uint32_t neuron_count,
+    const Statistics& stats
+) {
+    ParsedLayerSummaryV2 s;
+    s.layer_id = layer_id;
+    s.neuron_count = neuron_count;
+    s.mean = stats.mean;
+    s.std = stats.std;
+    s.min = stats.min;
+    s.max = stats.max;
+    s.l2_norm = stats.l2_norm;
+    s.zero_ratio = stats.zero_ratio;
+    s.p5 = stats.p5;
+    s.p25 = stats.p25;
+    s.p75 = stats.p75;
+    s.p95 = stats.p95;
+    s.kurtosis = stats.kurtosis;
+    s.skewness = stats.skewness;
+    
+    s.flags = NF_LAYER_FLAG_NONE;
+    if (stats.zero_ratio > 0.5f) s.flags |= NF_LAYER_FLAG_DEAD;
+    if (stats.max > 100.0f * (std::abs(stats.mean) + 1e-10f)) s.flags |= NF_LAYER_FLAG_EXPLODING;
+    
+    return s;
 }
 
 inline std::vector<uint8_t> build_control_packet(

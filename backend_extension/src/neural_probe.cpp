@@ -1,6 +1,7 @@
 #include "neural_probe.h"
 #include "server.h"
 #include "protocol.h"
+#include "protocol_parser.h"
 #include "ring_buffer.h"
 #include <memory>
 #include <iostream>
@@ -9,6 +10,7 @@
 #include <atomic>
 #include <algorithm>
 #include <vector>
+#include <cmath>
 
 static std::shared_ptr<RingBuffer> g_buffer;
 static std::unique_ptr<Server> g_server;
@@ -17,6 +19,7 @@ static std::atomic<float> g_threshold = 0.0f;
 static std::atomic<uint32_t> g_accum_steps = 0;
 static std::atomic<uint32_t> g_broadcast_interval = 0;
 static std::atomic<uint32_t> g_max_sparse = 0;
+static std::atomic<bool> g_use_v2 = true;
 
 void set_threshold(float threshold) {
     g_threshold = threshold;
@@ -39,6 +42,15 @@ NF_Result set_max_sparse_points(uint32_t max_points) {
     g_max_sparse = max_points;
     std::cout << "[NeuralProbe] Max sparse points set to " << max_points << std::endl;
     return NF_OK;
+}
+
+void set_use_v2(bool use_v2) {
+    g_use_v2 = use_v2;
+    std::cout << "[NeuralProbe] V2 mode " << (use_v2 ? "enabled" : "disabled") << std::endl;
+}
+
+bool get_use_v2() {
+    return g_use_v2.load();
 }
 
 static std::vector<uint8_t> build_control_packet(uint32_t opcode, uint32_t value_u32, float value_f32) {
@@ -223,24 +235,39 @@ NF_Result log_activation(int layer_id, py::array_t<float> tensor) {
         g_buffer->push(get_model_meta_packet());
     }
 
-    float sum = 0.0f;
-    float max_val = -1e9f;
     float threshold = g_threshold.load();
     std::vector<NF_ActivationEntryF32V1> sparse_entries;
-    sparse_entries.reserve(std::min(size, (size_t)1024)); 
+    sparse_entries.reserve(std::min(size, (size_t)1024));
 
     for (size_t i = 0; i < size; ++i) {
         float v = ptr[i];
-        sum += v;
-        if (v > max_val) max_val = v;
-        
         if (v > threshold) {
             sparse_entries.push_back({(uint32_t)i, v});
         }
     }
-    float mean = sum / size;
-    
-    {
+
+    if (g_use_v2.load()) {
+        nf::Statistics stats;
+        nf::compute_statistics(ptr, size, stats);
+        
+        nf::ParsedLayerSummaryV2 v2_summary = nf::statistics_to_v2_summary(
+            static_cast<uint32_t>(layer_id),
+            static_cast<uint32_t>(size),
+            stats
+        );
+        
+        auto packet = nf::build_layer_summary_packet_v2({v2_summary}, g_seq++, 0);
+        g_buffer->push(std::move(packet));
+    } else {
+        float sum = 0.0f;
+        float max_val = -1e9f;
+        for (size_t i = 0; i < size; ++i) {
+            float v = ptr[i];
+            sum += v;
+            if (v > max_val) max_val = v;
+        }
+        float mean = sum / size;
+        
         size_t payload_size = sizeof(NF_LayerSummaryBatchV1) + sizeof(NF_LayerSummaryV1);
         size_t total_size = sizeof(NF_PacketHeader) + payload_size;
         

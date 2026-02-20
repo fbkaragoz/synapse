@@ -14,6 +14,8 @@ void set_threshold(float threshold);
 NF_Result set_accumulation_steps(uint32_t steps);
 NF_Result set_broadcast_interval(uint32_t interval_ms);
 NF_Result set_max_sparse_points(uint32_t max_points);
+void set_use_v2(bool use_v2);
+bool get_use_v2();
 
 void handle_control_message(const uint8_t* data, size_t len);
 std::vector<uint8_t> get_state_snapshot();

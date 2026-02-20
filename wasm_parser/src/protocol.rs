@@ -8,6 +8,7 @@ pub const NF_MSG_SPARSE_ACTIVATIONS: u16 = 2;
 pub const NF_MSG_CONTROL: u16 = 3;
 pub const NF_MSG_MODEL_META: u16 = 4;
 pub const NF_MSG_GRADIENT_BATCH: u16 = 5;
+pub const NF_MSG_LAYER_SUMMARY_BATCH_V2: u16 = 6;
 
 pub const NF_FLAG_NONE: u32 = 0;
 pub const NF_FLAG_FP16: u32 = 1u32 << 0;
@@ -29,6 +30,8 @@ const HEADER_SIZE_LAYER_INFO: usize = 12;
 const HEADER_SIZE_CONTROL: usize = 16;
 const HEADER_SIZE_GRADIENT_BATCH: usize = 12;
 const ENTRY_SIZE_GRADIENT_SUMMARY: usize = 36;
+const HEADER_SIZE_LAYER_SUMMARY_BATCH_V2: usize = 8;
+const ENTRY_SIZE_LAYER_SUMMARY_V2: usize = 64;
 
 #[derive(Debug, Clone, Serialize)]
 pub enum ParseError {
@@ -57,6 +60,25 @@ pub struct LayerSummary {
     pub neuron_count: u32,
     pub mean: f32,
     pub max: f32,
+}
+
+#[derive(Serialize)]
+pub struct LayerSummaryV2 {
+    pub layer_id: u32,
+    pub neuron_count: u32,
+    pub mean: f32,
+    pub std: f32,
+    pub min: f32,
+    pub max: f32,
+    pub l2_norm: f32,
+    pub zero_ratio: f32,
+    pub p5: f32,
+    pub p25: f32,
+    pub p75: f32,
+    pub p95: f32,
+    pub kurtosis: f32,
+    pub skewness: f32,
+    pub flags: u32,
 }
 
 #[derive(Serialize)]
@@ -112,6 +134,7 @@ pub struct GradientBatch {
 pub struct ParsedPacket {
     pub header: PacketHeader,
     pub summaries: Option<Vec<LayerSummary>>,
+    pub v2_summaries: Option<Vec<LayerSummaryV2>>,
     pub sparse: Option<SparseActivations>,
     pub control: Option<ControlPacket>,
     pub meta: Option<ModelMeta>,
@@ -194,6 +217,7 @@ pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket,
 
     let payload = &data[payload_offset..expected_len];
     let mut summaries = None;
+    let mut v2_summaries = None;
     let mut sparse = None;
     let mut control = None;
     let mut meta = None;
@@ -469,12 +493,117 @@ pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket,
                 gradients: grad_list,
             });
         }
+        NF_MSG_LAYER_SUMMARY_BATCH_V2 => {
+            if payload.len() < HEADER_SIZE_LAYER_SUMMARY_BATCH_V2 {
+                return Err(ParseError::PayloadTooShort);
+            }
+
+            let count = u32::from_le_bytes(
+                payload[0..4]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            ) as usize;
+            let entry_size = ENTRY_SIZE_LAYER_SUMMARY_V2;
+            let start = HEADER_SIZE_LAYER_SUMMARY_BATCH_V2;
+
+            if payload.len() < start + count * entry_size {
+                return Err(ParseError::PayloadTruncated);
+            }
+
+            let mut v2_list = Vec::with_capacity(count);
+
+            for i in 0..count {
+                let offset = start + i * entry_size;
+                let chunk = &payload[offset..offset + entry_size];
+
+                v2_list.push(LayerSummaryV2 {
+                    layer_id: u32::from_le_bytes(
+                        chunk[0..4]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    neuron_count: u32::from_le_bytes(
+                        chunk[4..8]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    mean: f32::from_le_bytes(
+                        chunk[8..12]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    std: f32::from_le_bytes(
+                        chunk[12..16]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    min: f32::from_le_bytes(
+                        chunk[16..20]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    max: f32::from_le_bytes(
+                        chunk[20..24]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    l2_norm: f32::from_le_bytes(
+                        chunk[24..28]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    zero_ratio: f32::from_le_bytes(
+                        chunk[28..32]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    p5: f32::from_le_bytes(
+                        chunk[32..36]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    p25: f32::from_le_bytes(
+                        chunk[36..40]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    p75: f32::from_le_bytes(
+                        chunk[40..44]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    p95: f32::from_le_bytes(
+                        chunk[44..48]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    kurtosis: f32::from_le_bytes(
+                        chunk[48..52]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    skewness: f32::from_le_bytes(
+                        chunk[52..56]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    flags: u32::from_le_bytes(
+                        chunk[56..60]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                });
+            }
+
+            v2_summaries = Some(v2_list);
+        }
         _ => return Err(ParseError::UnsupportedMessageType(header.msg_type)),
     }
 
     Ok(ParsedPacket {
         header: header.clone(),
         summaries,
+        v2_summaries,
         sparse,
         control,
         meta,

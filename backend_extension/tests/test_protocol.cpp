@@ -146,6 +146,153 @@ TEST_CASE("Layer summary batch parsing", "[protocol]") {
     }
 }
 
+TEST_CASE("Layer summary batch V2 parsing", "[protocol]") {
+    
+    SECTION("Empty V2 batch") {
+        std::vector<uint8_t> payload(8, 0);
+        ParsedLayerSummaryBatchV2 batch;
+        ParseResult result = parse_layer_summary_batch_v2(payload.data(), payload.size(), batch);
+        
+        REQUIRE(result == ParseResult::OK);
+        REQUIRE(batch.summaries.empty());
+    }
+    
+    SECTION("Single V2 summary") {
+        ParsedLayerSummaryV2 s;
+        s.layer_id = 1;
+        s.neuron_count = 1000;
+        s.mean = 0.5f;
+        s.std = 0.2f;
+        s.min = 0.0f;
+        s.max = 2.0f;
+        s.l2_norm = 10.0f;
+        s.zero_ratio = 0.1f;
+        s.p5 = 0.05f;
+        s.p25 = 0.25f;
+        s.p75 = 0.75f;
+        s.p95 = 1.9f;
+        s.kurtosis = 0.5f;
+        s.skewness = 0.3f;
+        s.flags = 0;
+        
+        auto packet = build_layer_summary_packet_v2({s}, 100, 1000000);
+        
+        ParsedHeader header;
+        REQUIRE(parse_header(packet, header) == ParseResult::OK);
+        REQUIRE(header.msg_type == NF_MSG_LAYER_SUMMARY_BATCH_V2);
+        REQUIRE(header.seq == 100);
+        
+        ParsedLayerSummaryBatchV2 batch;
+        ParseResult result = parse_layer_summary_batch_v2(
+            packet.data() + 32, header.payload_bytes, batch
+        );
+        
+        REQUIRE(result == ParseResult::OK);
+        REQUIRE(batch.summaries.size() == 1);
+        REQUIRE(batch.summaries[0].layer_id == 1);
+        REQUIRE(batch.summaries[0].neuron_count == 1000);
+        REQUIRE(batch.summaries[0].mean == Approx(0.5f));
+        REQUIRE(batch.summaries[0].std == Approx(0.2f));
+        REQUIRE(batch.summaries[0].min == Approx(0.0f));
+        REQUIRE(batch.summaries[0].max == Approx(2.0f));
+        REQUIRE(batch.summaries[0].l2_norm == Approx(10.0f));
+        REQUIRE(batch.summaries[0].zero_ratio == Approx(0.1f));
+        REQUIRE(batch.summaries[0].p5 == Approx(0.05f));
+        REQUIRE(batch.summaries[0].p25 == Approx(0.25f));
+        REQUIRE(batch.summaries[0].p75 == Approx(0.75f));
+        REQUIRE(batch.summaries[0].p95 == Approx(1.9f));
+        REQUIRE(batch.summaries[0].kurtosis == Approx(0.5f));
+        REQUIRE(batch.summaries[0].skewness == Approx(0.3f));
+    }
+    
+    SECTION("Multiple V2 summaries") {
+        std::vector<ParsedLayerSummaryV2> summaries(3);
+        for (int i = 0; i < 3; ++i) {
+            summaries[i].layer_id = i;
+            summaries[i].neuron_count = 512 * (i + 1);
+            summaries[i].mean = 0.1f * (i + 1);
+            summaries[i].std = 0.05f * (i + 1);
+            summaries[i].min = -0.5f;
+            summaries[i].max = 1.0f + i * 0.5f;
+            summaries[i].l2_norm = 5.0f + i;
+            summaries[i].zero_ratio = 0.2f;
+            summaries[i].p5 = 0.02f;
+            summaries[i].p25 = 0.15f;
+            summaries[i].p75 = 0.85f;
+            summaries[i].p95 = 0.98f;
+            summaries[i].kurtosis = 0.0f;
+            summaries[i].skewness = 0.0f;
+            summaries[i].flags = 0;
+        }
+        
+        auto packet = build_layer_summary_packet_v2(summaries);
+        
+        ParsedHeader header;
+        REQUIRE(parse_header(packet, header) == ParseResult::OK);
+        
+        ParsedLayerSummaryBatchV2 batch;
+        ParseResult result = parse_layer_summary_batch_v2(
+            packet.data() + 32, header.payload_bytes, batch
+        );
+        
+        REQUIRE(result == ParseResult::OK);
+        REQUIRE(batch.summaries.size() == 3);
+        REQUIRE(batch.summaries[0].layer_id == 0);
+        REQUIRE(batch.summaries[1].layer_id == 1);
+        REQUIRE(batch.summaries[2].layer_id == 2);
+        REQUIRE(batch.summaries[2].neuron_count == 1536);
+        REQUIRE(batch.summaries[2].l2_norm == Approx(7.0f));
+    }
+    
+    SECTION("Truncated V2 batch returns error") {
+        std::vector<uint8_t> payload(20, 0);
+        *reinterpret_cast<uint32_t*>(payload.data()) = 5;
+        
+        ParsedLayerSummaryBatchV2 batch;
+        ParseResult result = parse_layer_summary_batch_v2(payload.data(), payload.size(), batch);
+        
+        REQUIRE(result == ParseResult::ERR_TRUNCATED_PAYLOAD);
+    }
+    
+    SECTION("Statistics to V2 summary conversion") {
+        std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
+        Statistics stats;
+        compute_statistics(data, stats);
+        
+        ParsedLayerSummaryV2 s = statistics_to_v2_summary(42, 5, stats);
+        
+        REQUIRE(s.layer_id == 42);
+        REQUIRE(s.neuron_count == 5);
+        REQUIRE(s.mean == Approx(3.0f));
+        REQUIRE(s.min == Approx(1.0f));
+        REQUIRE(s.max == Approx(5.0f));
+    }
+    
+    SECTION("Dead layer flag detection") {
+        std::vector<float> data(100, 0.0f);
+        for (int i = 0; i < 30; ++i) data[i] = 0.1f;
+        
+        Statistics stats;
+        compute_statistics(data, stats);
+        
+        ParsedLayerSummaryV2 s = statistics_to_v2_summary(0, 100, stats);
+        
+        REQUIRE(s.flags & NF_LAYER_FLAG_DEAD);
+    }
+    
+    SECTION("Exploding layer flag detection") {
+        std::vector<float> data(1000, 0.001f);
+        data[500] = 1000.0f;
+        
+        Statistics stats;
+        compute_statistics(data, stats);
+        
+        ParsedLayerSummaryV2 s = statistics_to_v2_summary(0, 1000, stats);
+        
+        REQUIRE(s.flags & NF_LAYER_FLAG_EXPLODING);
+    }
+}
+
 TEST_CASE("Control packet parsing", "[protocol]") {
     
     SECTION("Threshold control packet") {
