@@ -84,4 +84,20 @@ PYBIND11_MODULE(neural_probe, m) {
 
     m.def("clear_layer_selection", &clear_layer_selection,
           "Clear layer selection (capture all layers)");
+
+    py::enum_<NF_AttentionMode>(m, "AttentionMode")
+        .value("FULL", NF_ATTENTION_FULL)
+        .value("TOP_K", NF_ATTENTION_TOP_K)
+        .value("THRESHOLD", NF_ATTENTION_THRESHOLD)
+        .value("BAND", NF_ATTENTION_BAND)
+        .export_values();
+
+    m.def("log_attention", &log_attention,
+          "Log attention weights for a transformer layer/head",
+          py::arg("layer_id"),
+          py::arg("head_id"),
+          py::arg("weights"),
+          py::arg("mode") = NF_ATTENTION_TOP_K,
+          py::arg("max_entries") = 1000,
+          py::arg("threshold") = 0.0f);
 }

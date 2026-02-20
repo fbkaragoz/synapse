@@ -563,3 +563,146 @@ TEST_CASE("Gradient statistics computation", "[protocol]") {
         REQUIRE(stats.l2_norm < 1e-5f);
     }
 }
+
+TEST_CASE("Attention pattern parsing", "[protocol]") {
+    
+    SECTION("Empty attention pattern") {
+        std::vector<uint8_t> payload(20, 0);
+        ParsedAttentionPattern pattern;
+        ParseResult result = parse_attention_pattern(payload.data(), payload.size(), pattern);
+        
+        REQUIRE(result == ParseResult::OK);
+        REQUIRE(pattern.entries.empty());
+    }
+    
+    SECTION("Single attention entry") {
+        std::vector<ParsedAttentionEntry> entries = {
+            {0, 0, 1.0f}
+        };
+        
+        auto packet = build_attention_packet(5, 2, 10, 10, NF_ATTENTION_TOP_K, entries, 100, 1000000);
+        
+        ParsedHeader header;
+        REQUIRE(parse_header(packet, header) == ParseResult::OK);
+        REQUIRE(header.msg_type == NF_MSG_ATTENTION_PATTERN);
+        REQUIRE(header.seq == 100);
+        
+        ParsedAttentionPattern pattern;
+        ParseResult result = parse_attention_pattern(packet.data() + 32, header.payload_bytes, pattern);
+        
+        REQUIRE(result == ParseResult::OK);
+        REQUIRE(pattern.layer_id == 5);
+        REQUIRE(pattern.head_id == 2);
+        REQUIRE(pattern.seq_len == 10);
+        REQUIRE(pattern.tgt_len == 10);
+        REQUIRE(pattern.mode == NF_ATTENTION_TOP_K);
+        REQUIRE(pattern.entries.size() == 1);
+        REQUIRE(pattern.entries[0].src_idx == 0);
+        REQUIRE(pattern.entries[0].tgt_idx == 0);
+        REQUIRE(pattern.entries[0].weight == Approx(1.0f));
+    }
+    
+    SECTION("Multiple attention entries") {
+        std::vector<ParsedAttentionEntry> entries = {
+            {0, 1, 0.5f},
+            {0, 2, 0.3f},
+            {1, 0, 0.8f},
+            {2, 3, 0.2f}
+        };
+        
+        auto packet = build_attention_packet(0, 0, 4, 4, NF_ATTENTION_THRESHOLD, entries);
+        
+        ParsedHeader header;
+        REQUIRE(parse_header(packet, header) == ParseResult::OK);
+        
+        ParsedAttentionPattern pattern;
+        ParseResult result = parse_attention_pattern(packet.data() + 32, header.payload_bytes, pattern);
+        
+        REQUIRE(result == ParseResult::OK);
+        REQUIRE(pattern.entries.size() == 4);
+        REQUIRE(pattern.entries[0].src_idx == 0);
+        REQUIRE(pattern.entries[0].tgt_idx == 1);
+        REQUIRE(pattern.entries[3].src_idx == 2);
+        REQUIRE(pattern.entries[3].tgt_idx == 3);
+    }
+    
+    SECTION("Truncated attention pattern returns error") {
+        std::vector<uint8_t> payload(25, 0);
+        *reinterpret_cast<uint16_t*>(payload.data() + 14) = 10;  // entry_count = 10
+        
+        ParsedAttentionPattern pattern;
+        ParseResult result = parse_attention_pattern(payload.data(), payload.size(), pattern);
+        
+        REQUIRE(result == ParseResult::ERR_TRUNCATED_PAYLOAD);
+    }
+    
+    SECTION("Buffer too short returns error") {
+        uint8_t payload[10] = {0};
+        
+        ParsedAttentionPattern pattern;
+        ParseResult result = parse_attention_pattern(payload, 10, pattern);
+        
+        REQUIRE(result == ParseResult::ERR_BUFFER_TOO_SHORT);
+    }
+}
+
+TEST_CASE("Attention extraction functions", "[protocol]") {
+    
+    SECTION("Top-k extraction") {
+        std::vector<float> weights = {
+            0.1f, 0.2f, 0.3f,
+            0.4f, 0.5f, 0.6f,
+            0.7f, 0.8f, 0.9f
+        };
+        
+        auto entries = extract_attention_top_k(weights.data(), 3, 3, 3);
+        
+        REQUIRE(entries.size() == 3);
+        REQUIRE(entries[0].weight == Approx(0.9f));
+        REQUIRE(entries[1].weight == Approx(0.8f));
+        REQUIRE(entries[2].weight == Approx(0.7f));
+    }
+    
+    SECTION("Top-k with threshold") {
+        std::vector<float> weights = {
+            0.1f, 0.2f, 0.3f,
+            0.4f, 0.5f, 0.6f
+        };
+        
+        auto entries = extract_attention_top_k(weights.data(), 2, 3, 10, 0.5f);
+        
+        REQUIRE(entries.size() == 2);  // Only 0.5 and 0.6 pass threshold
+        REQUIRE(entries[0].weight >= 0.5f);
+        REQUIRE(entries[1].weight >= 0.5f);
+    }
+    
+    SECTION("Threshold extraction") {
+        std::vector<float> weights = {
+            0.1f, 0.5f, 0.2f,
+            0.8f, 0.3f, 0.9f
+        };
+        
+        auto entries = extract_attention_threshold(weights.data(), 2, 3, 0.5f);
+        
+        REQUIRE(entries.size() == 3);
+        for (const auto& e : entries) {
+            REQUIRE(e.weight >= 0.5f);
+        }
+    }
+    
+    SECTION("Threshold extraction - all below threshold") {
+        std::vector<float> weights = {0.1f, 0.2f, 0.3f, 0.4f};
+        
+        auto entries = extract_attention_threshold(weights.data(), 2, 2, 0.5f);
+        
+        REQUIRE(entries.empty());
+    }
+    
+    SECTION("Threshold extraction - all above threshold") {
+        std::vector<float> weights = {0.6f, 0.7f, 0.8f, 0.9f};
+        
+        auto entries = extract_attention_threshold(weights.data(), 2, 2, 0.5f);
+        
+        REQUIRE(entries.size() == 4);
+    }
+}

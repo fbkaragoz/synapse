@@ -24,6 +24,7 @@ enum NF_MsgType : uint16_t {
   NF_MSG_MODEL_META             = 4,   // topology
   NF_MSG_GRADIENT_BATCH         = 5,   // gradient statistics
   NF_MSG_LAYER_SUMMARY_BATCH_V2 = 6,   // extended statistics (64 bytes each)
+  NF_MSG_ATTENTION_PATTERN      = 7,   // transformer attention weights
 };
 
 enum NF_LayerFlags : uint32_t {
@@ -166,6 +167,34 @@ struct __attribute__((packed)) NF_GradientBatchV1 {
   uint32_t training_step;     // global step counter
   float    global_grad_norm;  // total gradient norm (after clipping)
   // Followed by NF_GradientSummaryV1 gradients[count]
+};
+
+// -------------------------------------------------------------
+// Attention Pattern (transformer attention visualization)
+// -------------------------------------------------------------
+enum NF_AttentionMode : uint8_t {
+  NF_ATTENTION_FULL      = 0,  // Full (seq x seq) matrix
+  NF_ATTENTION_TOP_K     = 1,  // Top-k per query
+  NF_ATTENTION_THRESHOLD = 2,  // Weights above threshold
+  NF_ATTENTION_BAND      = 3,  // Local attention band
+};
+
+struct __attribute__((packed)) NF_AttentionEntryV1 {
+  uint16_t src_idx;    // Query position
+  uint16_t tgt_idx;    // Key position
+  float    weight;     // Attention weight [0, 1]
+};
+
+struct __attribute__((packed)) NF_AttentionPatternV1 {
+  uint32_t layer_id;
+  uint32_t head_id;
+  uint16_t seq_len;         // Source sequence length
+  uint16_t tgt_len;         // Target sequence length (usually = seq_len)
+  uint8_t  mode;            // NF_AttentionMode
+  uint8_t  reserved0;
+  uint16_t entry_count;     // Number of entries that follow
+  uint32_t reserved1;
+  // Followed by NF_AttentionEntryV1 entries[entry_count]
 };
 
 #endif

@@ -582,3 +582,68 @@ void flush_gradient_batch() {
     
     g_buffer->push(std::move(packet));
 }
+
+NF_Result log_attention(
+    int layer_id,
+    int head_id,
+    py::array_t<float> weights,
+    uint8_t mode,
+    uint16_t max_entries,
+    float threshold
+) {
+    if (!g_buffer) return NF_ERR_NOT_STARTED;
+    
+    py::buffer_info buf = weights.request();
+    
+    if (buf.ndim < 2 || buf.ndim > 3) {
+        return NF_ERR_INVALID_DIMS;
+    }
+    if (buf.ptr == nullptr) {
+        return NF_ERR_NULL_POINTER;
+    }
+    
+    float* ptr = static_cast<float*>(buf.ptr);
+    
+    uint16_t seq_len = 0;
+    uint16_t tgt_len = 0;
+    
+    if (buf.ndim == 2) {
+        seq_len = static_cast<uint16_t>(buf.shape[0]);
+        tgt_len = static_cast<uint16_t>(buf.shape[1]);
+    } else {
+        seq_len = static_cast<uint16_t>(buf.shape[1]);
+        tgt_len = static_cast<uint16_t>(buf.shape[2]);
+    }
+    
+    std::vector<nf::ParsedAttentionEntry> entries;
+    
+    if (mode == NF_ATTENTION_TOP_K) {
+        entries = nf::extract_attention_top_k(ptr, seq_len, tgt_len, max_entries, threshold);
+    } else if (mode == NF_ATTENTION_THRESHOLD) {
+        entries = nf::extract_attention_threshold(ptr, seq_len, tgt_len, threshold);
+        if (entries.size() > max_entries) {
+            entries.resize(max_entries);
+        }
+    } else {
+        entries = nf::extract_attention_top_k(ptr, seq_len, tgt_len, max_entries, 0.0f);
+    }
+    
+    if (entries.empty()) {
+        return NF_OK;
+    }
+    
+    auto packet = nf::build_attention_packet(
+        static_cast<uint32_t>(layer_id),
+        static_cast<uint32_t>(head_id),
+        seq_len,
+        tgt_len,
+        mode,
+        entries,
+        g_seq++,
+        0
+    );
+    
+    g_buffer->push(std::move(packet));
+    
+    return NF_OK;
+}

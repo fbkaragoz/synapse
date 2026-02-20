@@ -34,6 +34,15 @@ NF_Result log_activation(int layer_id, py::array_t<float> tensor);
 
 NF_Result log_gradient(int layer_id, py::array_t<float> grad, py::array_t<float> weight);
 
+NF_Result log_attention(
+    int layer_id,
+    int head_id,
+    py::array_t<float> weights,
+    uint8_t mode,
+    uint16_t max_entries,
+    float threshold
+);
+
 void flush_gradient_batch();
 
 void set_training_step(uint64_t step);

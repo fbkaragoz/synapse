@@ -9,6 +9,7 @@ pub const NF_MSG_CONTROL: u16 = 3;
 pub const NF_MSG_MODEL_META: u16 = 4;
 pub const NF_MSG_GRADIENT_BATCH: u16 = 5;
 pub const NF_MSG_LAYER_SUMMARY_BATCH_V2: u16 = 6;
+pub const NF_MSG_ATTENTION_PATTERN: u16 = 7;
 
 pub const NF_FLAG_NONE: u32 = 0;
 pub const NF_FLAG_FP16: u32 = 1u32 << 0;
@@ -32,6 +33,8 @@ const HEADER_SIZE_GRADIENT_BATCH: usize = 12;
 const ENTRY_SIZE_GRADIENT_SUMMARY: usize = 36;
 const HEADER_SIZE_LAYER_SUMMARY_BATCH_V2: usize = 8;
 const ENTRY_SIZE_LAYER_SUMMARY_V2: usize = 64;
+const HEADER_SIZE_ATTENTION_PATTERN: usize = 20;
+const ENTRY_SIZE_ATTENTION: usize = 8;
 
 #[derive(Debug, Clone, Serialize)]
 pub enum ParseError {
@@ -131,6 +134,23 @@ pub struct GradientBatch {
 }
 
 #[derive(Serialize)]
+pub struct AttentionEntry {
+    pub src_idx: u16,
+    pub tgt_idx: u16,
+    pub weight: f32,
+}
+
+#[derive(Serialize)]
+pub struct AttentionPattern {
+    pub layer_id: u32,
+    pub head_id: u32,
+    pub seq_len: u16,
+    pub tgt_len: u16,
+    pub mode: u8,
+    pub entries: Vec<AttentionEntry>,
+}
+
+#[derive(Serialize)]
 pub struct ParsedPacket {
     pub header: PacketHeader,
     pub summaries: Option<Vec<LayerSummary>>,
@@ -139,6 +159,7 @@ pub struct ParsedPacket {
     pub control: Option<ControlPacket>,
     pub meta: Option<ModelMeta>,
     pub gradients: Option<GradientBatch>,
+    pub attention: Option<AttentionPattern>,
 }
 
 pub fn parse_header(data: &[u8]) -> Result<PacketHeader, ParseError> {
@@ -222,6 +243,7 @@ pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket,
     let mut control = None;
     let mut meta = None;
     let mut gradients = None;
+    let mut attention = None;
 
     match header.msg_type {
         NF_MSG_LAYER_SUMMARY_BATCH => {
@@ -493,6 +515,7 @@ pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket,
                 gradients: grad_list,
             });
         }
+<<<<<<< HEAD
         NF_MSG_LAYER_SUMMARY_BATCH_V2 => {
             if payload.len() < HEADER_SIZE_LAYER_SUMMARY_BATCH_V2 {
                 return Err(ParseError::PayloadTooShort);
@@ -597,6 +620,79 @@ pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket,
 
             v2_summaries = Some(v2_list);
         }
+        NF_MSG_ATTENTION_PATTERN => {
+            if payload.len() < HEADER_SIZE_ATTENTION_PATTERN {
+                return Err(ParseError::PayloadTooShort);
+            }
+
+            let layer_id = u32::from_le_bytes(
+                payload[0..4]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            );
+            let head_id = u32::from_le_bytes(
+                payload[4..8]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            );
+            let seq_len = u16::from_le_bytes(
+                payload[8..10]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            );
+            let tgt_len = u16::from_le_bytes(
+                payload[10..12]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            );
+            let mode = payload[12];
+            let entry_count = u16::from_le_bytes(
+                payload[14..16]
+                    .try_into()
+                    .map_err(|_| ParseError::PayloadTooShort)?,
+            ) as usize;
+
+            let start = HEADER_SIZE_ATTENTION_PATTERN;
+            let entry_size = ENTRY_SIZE_ATTENTION;
+
+            if payload.len() < start + entry_count * entry_size {
+                return Err(ParseError::PayloadTruncated);
+            }
+
+            let mut attn_entries = Vec::with_capacity(entry_count);
+
+            for i in 0..entry_count {
+                let offset = start + i * entry_size;
+                let chunk = &payload[offset..offset + entry_size];
+
+                attn_entries.push(AttentionEntry {
+                    src_idx: u16::from_le_bytes(
+                        chunk[0..2]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    tgt_idx: u16::from_le_bytes(
+                        chunk[2..4]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                    weight: f32::from_le_bytes(
+                        chunk[4..8]
+                            .try_into()
+                            .map_err(|_| ParseError::PayloadTruncated)?,
+                    ),
+                });
+            }
+
+            attention = Some(AttentionPattern {
+                layer_id,
+                head_id,
+                seq_len,
+                tgt_len,
+                mode,
+                entries: attn_entries,
+            });
+        }
         _ => return Err(ParseError::UnsupportedMessageType(header.msg_type)),
     }
 
@@ -608,5 +704,6 @@ pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket,
         control,
         meta,
         gradients,
+        attention,
     })
 }

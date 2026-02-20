@@ -650,6 +650,145 @@ inline std::vector<uint8_t> build_gradient_batch_packet(
                         payload.data(), static_cast<uint32_t>(payload_size));
 }
 
+struct ParsedAttentionEntry {
+    uint16_t src_idx;
+    uint16_t tgt_idx;
+    float weight;
+};
+
+struct ParsedAttentionPattern {
+    uint32_t layer_id;
+    uint32_t head_id;
+    uint16_t seq_len;
+    uint16_t tgt_len;
+    uint8_t mode;
+    std::vector<ParsedAttentionEntry> entries;
+};
+
+inline ParseResult parse_attention_pattern(const uint8_t* payload, size_t payload_len, ParsedAttentionPattern& out) {
+    if (payload_len < 20) {
+        return ParseResult::ERR_BUFFER_TOO_SHORT;
+    }
+    
+    out.layer_id = *reinterpret_cast<const uint32_t*>(payload);
+    out.head_id = *reinterpret_cast<const uint32_t*>(payload + 4);
+    out.seq_len = *reinterpret_cast<const uint16_t*>(payload + 8);
+    out.tgt_len = *reinterpret_cast<const uint16_t*>(payload + 10);
+    out.mode = payload[12];
+    uint16_t entry_count = *reinterpret_cast<const uint16_t*>(payload + 14);
+    
+    const size_t entry_size = 8;
+    const size_t required_size = 20 + (entry_count * entry_size);
+    if (payload_len < required_size) {
+        return ParseResult::ERR_TRUNCATED_PAYLOAD;
+    }
+    
+    out.entries.resize(entry_count);
+    for (uint16_t i = 0; i < entry_count; ++i) {
+        const uint8_t* entry = payload + 20 + (i * entry_size);
+        out.entries[i].src_idx = *reinterpret_cast<const uint16_t*>(entry);
+        out.entries[i].tgt_idx = *reinterpret_cast<const uint16_t*>(entry + 2);
+        out.entries[i].weight = *reinterpret_cast<const float*>(entry + 4);
+    }
+    
+    return ParseResult::OK;
+}
+
+inline std::vector<ParsedAttentionEntry> extract_attention_top_k(
+    const float* weights,
+    uint16_t seq_len,
+    uint16_t tgt_len,
+    uint16_t k,
+    float threshold = 0.0f
+) {
+    std::vector<std::pair<float, size_t>> weighted_indices;
+    weighted_indices.reserve(static_cast<size_t>(seq_len) * tgt_len);
+    
+    for (uint16_t s = 0; s < seq_len; ++s) {
+        for (uint16_t t = 0; t < tgt_len; ++t) {
+            float w = weights[static_cast<size_t>(s) * tgt_len + t];
+            if (w >= threshold) {
+                weighted_indices.push_back({w, static_cast<size_t>(s) * tgt_len + t});
+            }
+        }
+    }
+    
+    std::partial_sort(
+        weighted_indices.begin(),
+        weighted_indices.begin() + std::min(static_cast<size_t>(k), weighted_indices.size()),
+        weighted_indices.end(),
+        [](const auto& a, const auto& b) { return a.first > b.first; }
+    );
+    
+    std::vector<ParsedAttentionEntry> entries;
+    size_t count = std::min(static_cast<size_t>(k), weighted_indices.size());
+    entries.reserve(count);
+    
+    for (size_t i = 0; i < count; ++i) {
+        size_t idx = weighted_indices[i].second;
+        entries.push_back({
+            static_cast<uint16_t>(idx / tgt_len),
+            static_cast<uint16_t>(idx % tgt_len),
+            weighted_indices[i].first
+        });
+    }
+    
+    return entries;
+}
+
+inline std::vector<ParsedAttentionEntry> extract_attention_threshold(
+    const float* weights,
+    uint16_t seq_len,
+    uint16_t tgt_len,
+    float threshold
+) {
+    std::vector<ParsedAttentionEntry> entries;
+    
+    for (uint16_t s = 0; s < seq_len; ++s) {
+        for (uint16_t t = 0; t < tgt_len; ++t) {
+            float w = weights[static_cast<size_t>(s) * tgt_len + t];
+            if (w >= threshold) {
+                entries.push_back({s, t, w});
+            }
+        }
+    }
+    
+    return entries;
+}
+
+inline std::vector<uint8_t> build_attention_packet(
+    uint32_t layer_id,
+    uint32_t head_id,
+    uint16_t seq_len,
+    uint16_t tgt_len,
+    uint8_t mode,
+    const std::vector<ParsedAttentionEntry>& entries,
+    uint64_t seq = 0,
+    uint64_t timestamp_ns = 0
+) {
+    const size_t payload_size = 20 + entries.size() * 8;
+    std::vector<uint8_t> payload(payload_size);
+    
+    *reinterpret_cast<uint32_t*>(payload.data()) = layer_id;
+    *reinterpret_cast<uint32_t*>(payload.data() + 4) = head_id;
+    *reinterpret_cast<uint16_t*>(payload.data() + 8) = seq_len;
+    *reinterpret_cast<uint16_t*>(payload.data() + 10) = tgt_len;
+    payload[12] = mode;
+    payload[13] = 0;
+    *reinterpret_cast<uint16_t*>(payload.data() + 14) = static_cast<uint16_t>(entries.size());
+    *reinterpret_cast<uint32_t*>(payload.data() + 16) = 0;
+    
+    for (size_t i = 0; i < entries.size(); ++i) {
+        uint8_t* entry = payload.data() + 20 + i * 8;
+        *reinterpret_cast<uint16_t*>(entry) = entries[i].src_idx;
+        *reinterpret_cast<uint16_t*>(entry + 2) = entries[i].tgt_idx;
+        *reinterpret_cast<float*>(entry + 4) = entries[i].weight;
+    }
+    
+    return build_packet(NF_MSG_ATTENTION_PATTERN, NF_FLAG_FP32, seq, timestamp_ns,
+                        payload.data(), static_cast<uint32_t>(payload_size));
+}
+
 }
 
 #endif
