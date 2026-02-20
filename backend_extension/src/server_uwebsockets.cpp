@@ -47,14 +47,12 @@ public:
                         }
                         ws->subscribe("broadcast");
                         
-                        // 1. Send Model Meta (Topology)
                         auto meta = get_model_meta_packet();
-                        ws->send(std::string_view(reinterpret_cast<char*>(meta.data()), meta.size()), uWS::OpCode::BINARY);
+                        ws->send(std::string_view(reinterpret_cast<const char*>(meta.data()), meta.size()), uWS::OpCode::BINARY);
 
-                        // 2. Send State Snapshot (Config)
                         auto snapshots = get_state_snapshot_packets();
                         for (const auto& snapshot : snapshots) {
-                            ws->send(std::string_view(reinterpret_cast<char*>(snapshot.data()), snapshot.size()), uWS::OpCode::BINARY);
+                            ws->send(std::string_view(reinterpret_cast<const char*>(snapshot.data()), snapshot.size()), uWS::OpCode::BINARY);
                         }
                     },
                     .message = [](auto *ws, std::string_view message, uWS::OpCode opCode) {

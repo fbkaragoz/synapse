@@ -7,25 +7,39 @@
 #include <cstring>
 #include <chrono>
 #include <atomic>
-#include <algorithm> // for std::min
+#include <algorithm>
 #include <vector>
 
-// Global state
-// In a real library, might wrap this in a singleton class
 static std::shared_ptr<RingBuffer> g_buffer;
 static std::unique_ptr<Server> g_server;
 static uint64_t g_seq = 0;
-static std::atomic<float> g_threshold = 0.0f; // Default capture everything > 0? Or just 0.0
+static std::atomic<float> g_threshold = 0.0f;
+static std::atomic<uint32_t> g_accum_steps = 0;
+static std::atomic<uint32_t> g_broadcast_interval = 0;
+static std::atomic<uint32_t> g_max_sparse = 0;
 
 void set_threshold(float threshold) {
     g_threshold = threshold;
     std::cout << "[NeuralProbe] Threshold set to " << threshold << std::endl;
 }
 
-// Global configuration
-static std::atomic<uint32_t> g_accum_steps = 0;
-static std::atomic<uint32_t> g_broadcast_interval = 0;
-static std::atomic<uint32_t> g_max_sparse = 0;
+NF_Result set_accumulation_steps(uint32_t steps) {
+    g_accum_steps = steps;
+    std::cout << "[NeuralProbe] Accumulation steps set to " << steps << std::endl;
+    return NF_OK;
+}
+
+NF_Result set_broadcast_interval(uint32_t interval_ms) {
+    g_broadcast_interval = interval_ms;
+    std::cout << "[NeuralProbe] Broadcast interval set to " << interval_ms << "ms" << std::endl;
+    return NF_OK;
+}
+
+NF_Result set_max_sparse_points(uint32_t max_points) {
+    g_max_sparse = max_points;
+    std::cout << "[NeuralProbe] Max sparse points set to " << max_points << std::endl;
+    return NF_OK;
+}
 
 static std::vector<uint8_t> build_control_packet(uint32_t opcode, uint32_t value_u32, float value_f32) {
     size_t payload_size = sizeof(NF_ControlPacketV1);
@@ -146,21 +160,18 @@ std::vector<uint8_t> get_model_meta_packet() {
     return packet;
 }
 
-void start_server(const std::string& host, int port) {
+NF_Result start_server(const std::string& host, int port) {
     if (g_server && g_server->is_running()) {
         std::cout << "[NeuralProbe] Server already running." << std::endl;
-        return;
+        return NF_OK;
     }
 
-    // Initialize buffer with some capacity (e.g., 50MB worth of packets or Count)
-    // 1000 items? Depends on frame size.
     g_buffer = std::make_shared<RingBuffer>(1000); 
 
     g_server = create_uwebsockets_server();
-    // Host logic not fully used by uWS in this simple impl (binds to all interfaces usually), 
-    // but port is used.
     g_server->start(port, g_buffer);
     std::cout << "[NeuralProbe] Server started on port " << port << std::endl;
+    return NF_OK;
 }
 
 void stop_server() {
@@ -172,21 +183,22 @@ void stop_server() {
     g_buffer.reset();
 }
 
-// Helper to serialize data
-void log_activation(int layer_id, py::array_t<float> tensor) {
-    if (!g_buffer) return;
+NF_Result log_activation(int layer_id, py::array_t<float> tensor) {
+    if (!g_buffer) return NF_ERR_NOT_STARTED;
 
-    // Request raw buffer info (fast, no copy yet)
     py::buffer_info buf = tensor.request();
 
-    if (buf.ndim != 2 && buf.ndim != 3 && buf.ndim != 1) {
-        return; 
+    if (buf.ndim < 1 || buf.ndim > 3) {
+        return NF_ERR_INVALID_DIMS;
+    }
+    
+    if (buf.ptr == nullptr) {
+        return NF_ERR_NULL_POINTER;
     }
 
     float* ptr = static_cast<float*>(buf.ptr);
-    size_t size = buf.size; // Total elements
+    size_t size = buf.size;
 
-    // Auto-Register Layer Topology IF NEW
     bool added_new_layer = false;
     {
         std::lock_guard<std::mutex> lock(g_layer_mutex);
@@ -195,7 +207,6 @@ void log_activation(int layer_id, py::array_t<float> tensor) {
             info.layer_id = (uint32_t)layer_id;
             info.neuron_count = (uint32_t)size;
             
-            // Heuristic: Square-ish layout
             float side = std::sqrt((float)size);
             info.recommended_width = (uint16_t)std::ceil(side);
             info.recommended_height = (uint16_t)std::ceil((float)size / info.recommended_width);
@@ -208,20 +219,14 @@ void log_activation(int layer_id, py::array_t<float> tensor) {
         }
     }
 
-    // If we discovered a new layer after clients connected, broadcast updated topology.
     if (added_new_layer && g_buffer) {
         g_buffer->push(get_model_meta_packet());
     }
 
     float sum = 0.0f;
     float max_val = -1e9f;
-    
-    // Collect Sparse Entries
-    // We only collect if value > threshold
     float threshold = g_threshold.load();
     std::vector<NF_ActivationEntryF32V1> sparse_entries;
-    // Pre-allocate to avoid reallocs if possible? 
-    // Heuristic: if threshold is high, sparse_entries is small.
     sparse_entries.reserve(std::min(size, (size_t)1024)); 
 
     for (size_t i = 0; i < size; ++i) {
@@ -234,14 +239,7 @@ void log_activation(int layer_id, py::array_t<float> tensor) {
         }
     }
     float mean = sum / size;
-
-    // 2. Build Packet
-    // We will send BOTH Summary and Sparse for now (simplest for Phase 3).
-    // Or just one packet with Type = Sparse? 
-    // Protocol has: MSG_LAYER_SUMMARY_BATCH and MSG_SPARSE_ACTIVATIONS.
-    // Let's send 2 packets back-to-back? Or just Summary if sparse is empty?
     
-    // SEND SUMMARY
     {
         size_t payload_size = sizeof(NF_LayerSummaryBatchV1) + sizeof(NF_LayerSummaryV1);
         size_t total_size = sizeof(NF_PacketHeader) + payload_size;
@@ -249,7 +247,6 @@ void log_activation(int layer_id, py::array_t<float> tensor) {
         std::vector<uint8_t> packet(total_size);
         uint8_t* raw = packet.data();
         
-        // Header
         NF_PacketHeader* hdr = reinterpret_cast<NF_PacketHeader*>(raw);
         hdr->magic = 0x574C464E; 
         hdr->version = 1;
@@ -274,8 +271,6 @@ void log_activation(int layer_id, py::array_t<float> tensor) {
         g_buffer->push(std::move(packet));
     }
 
-    // SEND SPARSE (if any)
-    // Limit sparse packet size? 10k entries = 80KB. Fine for localhost.
     if (!sparse_entries.empty()) {
         size_t entries_size = sparse_entries.size() * sizeof(NF_ActivationEntryF32V1);
         size_t payload_size = sizeof(NF_SparseActivationsV1) + entries_size;
@@ -284,18 +279,16 @@ void log_activation(int layer_id, py::array_t<float> tensor) {
         std::vector<uint8_t> packet(total_size);
         uint8_t* raw = packet.data();
         
-        // Header
         NF_PacketHeader* hdr = reinterpret_cast<NF_PacketHeader*>(raw);
         hdr->magic = 0x574C464E; 
         hdr->version = 1;
         hdr->msg_type = NF_MSG_SPARSE_ACTIVATIONS;
         hdr->flags = NF_FLAG_FP32;
-        hdr->seq = g_seq++; // distinct seq
+        hdr->seq = g_seq++;
         auto now = std::chrono::steady_clock::now();
         hdr->timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
         hdr->payload_bytes = payload_size;
         
-        // Payload
         uint8_t* payload_ptr = raw + sizeof(NF_PacketHeader);
         NF_SparseActivationsV1* sparse_hdr = reinterpret_cast<NF_SparseActivationsV1*>(payload_ptr);
         sparse_hdr->layer_id = (uint32_t)layer_id;
@@ -303,10 +296,11 @@ void log_activation(int layer_id, py::array_t<float> tensor) {
         sparse_hdr->reserved0 = 0;
         sparse_hdr->reserved1 = 0;
         
-        // Copy entries
         uint8_t* entries_ptr = payload_ptr + sizeof(NF_SparseActivationsV1);
         std::memcpy(entries_ptr, sparse_entries.data(), entries_size);
         
         g_buffer->push(std::move(packet));
     }
+    
+    return NF_OK;
 }

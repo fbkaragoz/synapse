@@ -3,6 +3,16 @@
 
 #include <cstdint>
 
+enum NF_Result : uint32_t {
+  NF_OK                    = 0,
+  NF_ERR_NOT_STARTED       = 1,
+  NF_ERR_INVALID_DIMS      = 2,
+  NF_ERR_BUFFER_FULL       = 3,
+  NF_ERR_NULL_POINTER      = 4,
+  NF_ERR_LAYER_NOT_FOUND   = 5,
+  NF_ERR_INVALID_THRESHOLD = 6,
+};
+
 // WIRE FORMAT: little-endian, packed-by-definition
 // We use manual serialization or ensure compiler does not pad these specific structs.
 // For standard types (u32, u64), alignment usually works out, but effectively we treat the wire format as byte-packed.

@@ -5,9 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Dependency strategy
-# - In restricted/offline environments, FetchContent Git clones will fail.
-# - Prefer vendoring dependencies under backend_extension/third_party or using system packages.
+# Build options
+option(NF_BUILD_TESTS "Build unit tests" ON)
 option(NF_USE_FETCHCONTENT "Allow downloading dependencies (git clone)" ON)
 option(NF_USE_SYSTEM_PYBIND11 "Use system-installed pybind11 (find_package)" OFF)
 
@@ -117,4 +116,52 @@ target_link_libraries(neural_probe PRIVATE uSockets)
 # Fix for uSockets C++ linking if needed
 if(UNIX)
     target_link_libraries(neural_probe PRIVATE pthread)
+endif()
+
+# =============================================================================
+# Testing with Catch2
+# =============================================================================
+if(NF_BUILD_TESTS)
+    # Catch2
+    set(NF_CATCH2_DIR "" CACHE PATH "Path to vendored Catch2 checkout (optional)")
+    if(NF_CATCH2_DIR STREQUAL "" AND EXISTS "${NF_THIRD_PARTY_DIR}/Catch2/CMakeLists.txt")
+        set(NF_CATCH2_DIR "${NF_THIRD_PARTY_DIR}/Catch2")
+    endif()
+    
+    if(NF_CATCH2_DIR STREQUAL "")
+        if(NF_USE_FETCHCONTENT)
+            FetchContent_Declare(
+                Catch2
+                GIT_REPOSITORY https://github.com/catchorg/Catch2
+                GIT_TAG        v3.5.0
+            )
+            FetchContent_MakeAvailable(Catch2)
+        else()
+            message(FATAL_ERROR "Catch2 not found. Vendor it under backend_extension/third_party/Catch2 or set NF_CATCH2_DIR.")
+        endif()
+    else()
+        add_subdirectory("${NF_CATCH2_DIR}" "${CMAKE_BINARY_DIR}/Catch2")
+    endif()
+    
+    # Test executable
+    add_executable(neural_probe_tests
+        tests/test_main.cpp
+        tests/test_protocol.cpp
+        tests/test_ring_buffer.cpp
+        tests/test_statistics.cpp
+    )
+    
+    target_include_directories(neural_probe_tests PRIVATE
+        include
+    )
+    
+    target_link_libraries(neural_probe_tests PRIVATE
+        Catch2::Catch2WithMain
+        pthread
+    )
+    
+    # Discover tests for CTest
+    include(CTest)
+    include(Catch)
+    catch_discover_tests(neural_probe_tests)
 endif()
