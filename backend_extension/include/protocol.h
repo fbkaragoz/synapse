@@ -114,6 +114,11 @@ enum NF_ControlOpcode : uint32_t {
     NF_OP_SET_ACCUMULATION_STEPS   = 2,
     NF_OP_SET_BROADCAST_INTERVAL   = 3,
     NF_OP_SET_MAX_SPARSE_POINTS    = 4,
+    NF_OP_SET_SAMPLE_RATE          = 5,   // Capture every Nth forward pass
+    NF_OP_CLEAR_LAYER_SELECTION    = 6,   // Reset to capture all layers
+    NF_OP_ADD_LAYER_TO_WHITELIST   = 7,   // Add layer ID to whitelist
+    NF_OP_ADD_LAYER_TO_BLACKLIST   = 8,   // Add layer ID to blacklist
+    NF_OP_SET_LAYER_SELECTION_MODE = 9,   // 0=all, 1=whitelist, 2=blacklist
     NF_OP_STATE_SNAPSHOT           = 100, // Backend -> Frontend config sync
     NF_OP_ACK                      = 101, // Backend -> Frontend
 };

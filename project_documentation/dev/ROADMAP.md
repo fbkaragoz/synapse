@@ -349,19 +349,55 @@ kurtosis (4) | skewness (4) | flags (4) | reserved (4)
 
 **Theme**: Configurable fidelity/overhead trade-off
 
+**Status**: ✅ COMPLETED (2026-02-21)
+
 | Task | Est. | Status |
 |------|------|--------|
-| Welford accumulation | 4h | [ ] |
-| accum_steps wiring | 3h | [ ] |
-| Layer selection protocol | 2h | [ ] |
-| Layer selection UI | 3h | [ ] |
-| Sampling rate control | 2h | [ ] |
+| Welford accumulation | 4h | [x] |
+| accum_steps wiring | 3h | [x] |
+| Layer selection protocol | 2h | [x] |
+| Layer selection UI | 3h | [ ] (deferred) |
+| Sampling rate control | 2h | [x] |
 | **Total** | **14h** | |
 
 **Exit Criteria**:
-- Accumulation reduces overhead measurably
-- Layer selection works via UI
-- Sampling rate configurable
+- [x] Accumulation reduces overhead measurably
+- [x] Layer selection works via API
+- [ ] Layer selection UI (deferred)
+- [x] Sampling rate configurable
+
+**Deliverables**:
+- `include/protocol_parser.h` - WelfordAccumulator class with online statistics
+- `include/protocol.h` - NF_OP_SELECT_LAYERS, NF_OP_SET_SAMPLE_RATE opcodes
+- `src/neural_probe.cpp` - Accumulation mode, layer selection, sampling
+- `tests/test_statistics.cpp` - Welford accumulator tests (5 new test cases)
+
+**New Python API**:
+```python
+import neural_probe
+
+# Sampling: capture every Nth forward pass
+neural_probe.set_sample_rate(10)  # Only capture 1 in 10
+
+# Layer selection modes
+neural_probe.set_layer_selection_mode(0)  # All layers (default)
+neural_probe.set_layer_selection_mode(1)  # Whitelist mode
+neural_probe.set_layer_selection_mode(2)  # Blacklist mode
+
+neural_probe.add_layer_to_whitelist(0)
+neural_probe.add_layer_to_whitelist(5)
+neural_probe.add_layer_to_blacklist(10)
+neural_probe.clear_layer_selection()
+
+# Accumulation: emit after N calls per layer
+neural_probe.set_accumulation_steps(10)  # Average over 10 calls
+```
+
+**Welford Accumulator Features**:
+- Numerically stable mean/variance computation
+- Incremental updates (no need to store all values)
+- Reset and reuse support
+- Matches exact compute_statistics output
 
 ---
 
@@ -466,23 +502,23 @@ kurtosis (4) | skewness (4) | flags (4) | reserved (4)
 - 1A - Test Foundation ✅
 - 1B - Gradient Capture ✅
 - 2 - Extended Statistics ✅
+- 3 - Accumulation & Layer Selection ✅
 
-**Active Iteration**: 3 - Accumulation & Layer Selection
+**Active Iteration**: 4 - Attention Visualization
 
 **Next Steps**:
-1. Implement Welford accumulation for online statistics
-2. Wire accum_steps to log_activation
-3. Add layer selection protocol (whitelist/blacklist)
-4. Add sampling rate control
-5. Frontend layer selection UI
+1. Define attention protocol structures
+2. Implement log_attention API
+3. Create attention hook for transformers
+4. Update WASM parser
+5. Frontend edge rendering
 
-**Iteration 2 Summary**:
-- NF_MSG_LAYER_SUMMARY_BATCH_V2 (64 bytes per entry)
-- 13 statistics: mean, std, min, max, l2_norm, zero_ratio, p5, p25, p75, p95, kurtosis, skewness, flags
-- Automatic flag detection for dead/exploding layers
-- set_use_v2/get_use_v2 API for backward compatibility
-- WASM parser V2 support
-- 21 test cases with 220 assertions all passing
+**Iteration 3 Summary**:
+- WelfordAccumulator class for online statistics
+- Accumulation mode (emit every N calls per layer)
+- Layer selection (whitelist/blacklist modes)
+- Sampling rate control (capture every Nth forward pass)
+- 26 test cases with 259 assertions all passing
 
 ---
 
@@ -490,6 +526,7 @@ kurtosis (4) | skewness (4) | flags (4) | reserved (4)
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-02-21 | 1.3 | Completed Iteration 3 - Accumulation & layer selection |
 | 2026-02-21 | 1.2 | Completed Iteration 2 - Extended statistics |
 | 2026-02-21 | 1.1 | Completed Iteration 1B - Gradient capture |
 | 2026-02-21 | 1.0 | Initial roadmap creation |

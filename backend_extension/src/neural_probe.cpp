@@ -11,6 +11,9 @@
 #include <algorithm>
 #include <vector>
 #include <cmath>
+#include <set>
+#include <map>
+#include <mutex>
 
 static std::shared_ptr<RingBuffer> g_buffer;
 static std::unique_ptr<Server> g_server;
@@ -20,6 +23,22 @@ static std::atomic<uint32_t> g_accum_steps = 0;
 static std::atomic<uint32_t> g_broadcast_interval = 0;
 static std::atomic<uint32_t> g_max_sparse = 0;
 static std::atomic<bool> g_use_v2 = true;
+static std::atomic<uint32_t> g_sample_rate = 1;
+static std::atomic<uint64_t> g_forward_count = 0;
+
+enum LayerSelectionMode {
+    LAYER_MODE_ALL = 0,
+    LAYER_MODE_WHITELIST = 1,
+    LAYER_MODE_BLACKLIST = 2
+};
+
+static std::atomic<uint32_t> g_layer_selection_mode = LAYER_MODE_ALL;
+static std::set<uint32_t> g_layer_whitelist;
+static std::set<uint32_t> g_layer_blacklist;
+static std::mutex g_layer_selection_mutex;
+
+static std::map<uint32_t, nf::WelfordAccumulator> g_layer_accumulators;
+static std::mutex g_accumulator_mutex;
 
 void set_threshold(float threshold) {
     g_threshold = threshold;
@@ -51,6 +70,64 @@ void set_use_v2(bool use_v2) {
 
 bool get_use_v2() {
     return g_use_v2.load();
+}
+
+NF_Result set_sample_rate(uint32_t rate) {
+    if (rate == 0) rate = 1;
+    g_sample_rate = rate;
+    std::cout << "[NeuralProbe] Sample rate set to " << rate << " (capture every " << rate << " forward passes)" << std::endl;
+    return NF_OK;
+}
+
+uint32_t get_sample_rate() {
+    return g_sample_rate.load();
+}
+
+NF_Result set_layer_selection_mode(uint32_t mode) {
+    if (mode > 2) return NF_ERR_INVALID_THRESHOLD;
+    g_layer_selection_mode = mode;
+    const char* mode_str = (mode == 0) ? "all" : (mode == 1) ? "whitelist" : "blacklist";
+    std::cout << "[NeuralProbe] Layer selection mode set to " << mode_str << std::endl;
+    return NF_OK;
+}
+
+NF_Result add_layer_to_whitelist(uint32_t layer_id) {
+    std::lock_guard<std::mutex> lock(g_layer_selection_mutex);
+    g_layer_whitelist.insert(layer_id);
+    std::cout << "[NeuralProbe] Added layer " << layer_id << " to whitelist" << std::endl;
+    return NF_OK;
+}
+
+NF_Result add_layer_to_blacklist(uint32_t layer_id) {
+    std::lock_guard<std::mutex> lock(g_layer_selection_mutex);
+    g_layer_blacklist.insert(layer_id);
+    std::cout << "[NeuralProbe] Added layer " << layer_id << " to blacklist" << std::endl;
+    return NF_OK;
+}
+
+NF_Result clear_layer_selection() {
+    std::lock_guard<std::mutex> lock(g_layer_selection_mutex);
+    g_layer_whitelist.clear();
+    g_layer_blacklist.clear();
+    g_layer_selection_mode = LAYER_MODE_ALL;
+    std::cout << "[NeuralProbe] Layer selection cleared (now capturing all layers)" << std::endl;
+    return NF_OK;
+}
+
+static bool should_capture_layer(uint32_t layer_id) {
+    uint32_t mode = g_layer_selection_mode.load();
+    
+    if (mode == LAYER_MODE_ALL) {
+        return true;
+    }
+    
+    std::lock_guard<std::mutex> lock(g_layer_selection_mutex);
+    
+    if (mode == LAYER_MODE_WHITELIST) {
+        return g_layer_whitelist.count(layer_id) > 0;
+    } else { // LAYER_MODE_BLACKLIST
+        return g_layer_blacklist.count(layer_id) == 0;
+    }
 }
 
 static std::vector<uint8_t> build_control_packet(uint32_t opcode, uint32_t value_u32, float value_f32) {
@@ -197,6 +274,18 @@ void stop_server() {
 
 NF_Result log_activation(int layer_id, py::array_t<float> tensor) {
     if (!g_buffer) return NF_ERR_NOT_STARTED;
+    
+    // Sample rate check - only capture every Nth forward pass
+    uint64_t current_count = g_forward_count.fetch_add(1);
+    uint32_t sample_rate = g_sample_rate.load();
+    if (sample_rate > 1 && (current_count % sample_rate) != 0) {
+        return NF_OK;  // Skip this forward pass
+    }
+    
+    // Layer selection check
+    if (!should_capture_layer(static_cast<uint32_t>(layer_id))) {
+        return NF_OK;  // Layer not selected
+    }
 
     py::buffer_info buf = tensor.request();
 
@@ -235,98 +324,124 @@ NF_Result log_activation(int layer_id, py::array_t<float> tensor) {
         g_buffer->push(get_model_meta_packet());
     }
 
-    float threshold = g_threshold.load();
-    std::vector<NF_ActivationEntryF32V1> sparse_entries;
-    sparse_entries.reserve(std::min(size, (size_t)1024));
-
-    for (size_t i = 0; i < size; ++i) {
-        float v = ptr[i];
-        if (v > threshold) {
-            sparse_entries.push_back({(uint32_t)i, v});
+    uint32_t accum_steps = g_accum_steps.load();
+    
+    if (accum_steps > 1) {
+        // Accumulation mode - accumulate statistics over multiple calls
+        std::lock_guard<std::mutex> lock(g_accumulator_mutex);
+        
+        auto& acc = g_layer_accumulators[layer_id];
+        acc.add(ptr, size);
+        
+        // Check if we should emit
+        if (acc.count() >= accum_steps) {
+            nf::Statistics stats = acc.get_statistics();
+            acc.reset();
+            
+            nf::ParsedLayerSummaryV2 v2_summary = nf::statistics_to_v2_summary(
+                static_cast<uint32_t>(layer_id),
+                static_cast<uint32_t>(size),
+                stats
+            );
+            
+            auto packet = nf::build_layer_summary_packet_v2({v2_summary}, g_seq++, 0);
+            g_buffer->push(std::move(packet));
         }
-    }
-
-    if (g_use_v2.load()) {
-        nf::Statistics stats;
-        nf::compute_statistics(ptr, size, stats);
-        
-        nf::ParsedLayerSummaryV2 v2_summary = nf::statistics_to_v2_summary(
-            static_cast<uint32_t>(layer_id),
-            static_cast<uint32_t>(size),
-            stats
-        );
-        
-        auto packet = nf::build_layer_summary_packet_v2({v2_summary}, g_seq++, 0);
-        g_buffer->push(std::move(packet));
     } else {
-        float sum = 0.0f;
-        float max_val = -1e9f;
+        // Immediate mode - emit on every call
+        float threshold = g_threshold.load();
+        std::vector<NF_ActivationEntryF32V1> sparse_entries;
+        sparse_entries.reserve(std::min(size, (size_t)1024));
+
         for (size_t i = 0; i < size; ++i) {
             float v = ptr[i];
-            sum += v;
-            if (v > max_val) max_val = v;
+            if (v > threshold) {
+                sparse_entries.push_back({(uint32_t)i, v});
+            }
         }
-        float mean = sum / size;
-        
-        size_t payload_size = sizeof(NF_LayerSummaryBatchV1) + sizeof(NF_LayerSummaryV1);
-        size_t total_size = sizeof(NF_PacketHeader) + payload_size;
-        
-        std::vector<uint8_t> packet(total_size);
-        uint8_t* raw = packet.data();
-        
-        NF_PacketHeader* hdr = reinterpret_cast<NF_PacketHeader*>(raw);
-        hdr->magic = 0x574C464E; 
-        hdr->version = 1;
-        hdr->msg_type = NF_MSG_LAYER_SUMMARY_BATCH;
-        hdr->flags = NF_FLAG_FP32;
-        hdr->seq = g_seq++;
-        auto now = std::chrono::steady_clock::now();
-        hdr->timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
-        hdr->payload_bytes = payload_size;
-        
-        uint8_t* payload_ptr = raw + sizeof(NF_PacketHeader);
-        NF_LayerSummaryBatchV1* batch = reinterpret_cast<NF_LayerSummaryBatchV1*>(payload_ptr);
-        batch->count = 1; 
-        batch->reserved = 0;
-        
-        NF_LayerSummaryV1* summary = reinterpret_cast<NF_LayerSummaryV1*>(payload_ptr + sizeof(NF_LayerSummaryBatchV1));
-        summary->layer_id = (uint32_t)layer_id;
-        summary->neuron_count = (uint32_t)size;
-        summary->mean = mean;
-        summary->max = max_val;
-        
-        g_buffer->push(std::move(packet));
-    }
 
-    if (!sparse_entries.empty()) {
-        size_t entries_size = sparse_entries.size() * sizeof(NF_ActivationEntryF32V1);
-        size_t payload_size = sizeof(NF_SparseActivationsV1) + entries_size;
-        size_t total_size = sizeof(NF_PacketHeader) + payload_size;
-        
-        std::vector<uint8_t> packet(total_size);
-        uint8_t* raw = packet.data();
-        
-        NF_PacketHeader* hdr = reinterpret_cast<NF_PacketHeader*>(raw);
-        hdr->magic = 0x574C464E; 
-        hdr->version = 1;
-        hdr->msg_type = NF_MSG_SPARSE_ACTIVATIONS;
-        hdr->flags = NF_FLAG_FP32;
-        hdr->seq = g_seq++;
-        auto now = std::chrono::steady_clock::now();
-        hdr->timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
-        hdr->payload_bytes = payload_size;
-        
-        uint8_t* payload_ptr = raw + sizeof(NF_PacketHeader);
-        NF_SparseActivationsV1* sparse_hdr = reinterpret_cast<NF_SparseActivationsV1*>(payload_ptr);
-        sparse_hdr->layer_id = (uint32_t)layer_id;
-        sparse_hdr->count = (uint32_t)sparse_entries.size();
-        sparse_hdr->reserved0 = 0;
-        sparse_hdr->reserved1 = 0;
-        
-        uint8_t* entries_ptr = payload_ptr + sizeof(NF_SparseActivationsV1);
-        std::memcpy(entries_ptr, sparse_entries.data(), entries_size);
-        
-        g_buffer->push(std::move(packet));
+        if (g_use_v2.load()) {
+            nf::Statistics stats;
+            nf::compute_statistics(ptr, size, stats);
+            
+            nf::ParsedLayerSummaryV2 v2_summary = nf::statistics_to_v2_summary(
+                static_cast<uint32_t>(layer_id),
+                static_cast<uint32_t>(size),
+                stats
+            );
+            
+            auto packet = nf::build_layer_summary_packet_v2({v2_summary}, g_seq++, 0);
+            g_buffer->push(std::move(packet));
+        } else {
+            float sum = 0.0f;
+            float max_val = -1e9f;
+            for (size_t i = 0; i < size; ++i) {
+                float v = ptr[i];
+                sum += v;
+                if (v > max_val) max_val = v;
+            }
+            float mean = sum / size;
+            
+            size_t payload_size = sizeof(NF_LayerSummaryBatchV1) + sizeof(NF_LayerSummaryV1);
+            size_t total_size = sizeof(NF_PacketHeader) + payload_size;
+            
+            std::vector<uint8_t> packet(total_size);
+            uint8_t* raw = packet.data();
+            
+            NF_PacketHeader* hdr = reinterpret_cast<NF_PacketHeader*>(raw);
+            hdr->magic = 0x574C464E; 
+            hdr->version = 1;
+            hdr->msg_type = NF_MSG_LAYER_SUMMARY_BATCH;
+            hdr->flags = NF_FLAG_FP32;
+            hdr->seq = g_seq++;
+            auto now = std::chrono::steady_clock::now();
+            hdr->timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+            hdr->payload_bytes = payload_size;
+            
+            uint8_t* payload_ptr = raw + sizeof(NF_PacketHeader);
+            NF_LayerSummaryBatchV1* batch = reinterpret_cast<NF_LayerSummaryBatchV1*>(payload_ptr);
+            batch->count = 1; 
+            batch->reserved = 0;
+            
+            NF_LayerSummaryV1* summary = reinterpret_cast<NF_LayerSummaryV1*>(payload_ptr + sizeof(NF_LayerSummaryBatchV1));
+            summary->layer_id = (uint32_t)layer_id;
+            summary->neuron_count = (uint32_t)size;
+            summary->mean = mean;
+            summary->max = max_val;
+            
+            g_buffer->push(std::move(packet));
+        }
+
+        if (!sparse_entries.empty()) {
+            size_t entries_size = sparse_entries.size() * sizeof(NF_ActivationEntryF32V1);
+            size_t payload_size = sizeof(NF_SparseActivationsV1) + entries_size;
+            size_t total_size = sizeof(NF_PacketHeader) + payload_size;
+            
+            std::vector<uint8_t> packet(total_size);
+            uint8_t* raw = packet.data();
+            
+            NF_PacketHeader* hdr = reinterpret_cast<NF_PacketHeader*>(raw);
+            hdr->magic = 0x574C464E; 
+            hdr->version = 1;
+            hdr->msg_type = NF_MSG_SPARSE_ACTIVATIONS;
+            hdr->flags = NF_FLAG_FP32;
+            hdr->seq = g_seq++;
+            auto now = std::chrono::steady_clock::now();
+            hdr->timestamp_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+            hdr->payload_bytes = payload_size;
+            
+            uint8_t* payload_ptr = raw + sizeof(NF_PacketHeader);
+            NF_SparseActivationsV1* sparse_hdr = reinterpret_cast<NF_SparseActivationsV1*>(payload_ptr);
+            sparse_hdr->layer_id = (uint32_t)layer_id;
+            sparse_hdr->count = (uint32_t)sparse_entries.size();
+            sparse_hdr->reserved0 = 0;
+            sparse_hdr->reserved1 = 0;
+            
+            uint8_t* entries_ptr = payload_ptr + sizeof(NF_SparseActivationsV1);
+            std::memcpy(entries_ptr, sparse_entries.data(), entries_size);
+            
+            g_buffer->push(std::move(packet));
+        }
     }
     
     return NF_OK;

@@ -62,4 +62,26 @@ PYBIND11_MODULE(neural_probe, m) {
 
     m.def("get_use_v2", &get_use_v2,
           "Check if V2 extended statistics mode is enabled");
+
+    m.def("set_sample_rate", &set_sample_rate,
+          "Set sample rate - capture every Nth forward pass (default 1)",
+          py::arg("rate"));
+
+    m.def("get_sample_rate", &get_sample_rate,
+          "Get current sample rate");
+
+    m.def("set_layer_selection_mode", &set_layer_selection_mode,
+          "Set layer selection mode: 0=all, 1=whitelist, 2=blacklist",
+          py::arg("mode"));
+
+    m.def("add_layer_to_whitelist", &add_layer_to_whitelist,
+          "Add a layer ID to the whitelist",
+          py::arg("layer_id"));
+
+    m.def("add_layer_to_blacklist", &add_layer_to_blacklist,
+          "Add a layer ID to the blacklist",
+          py::arg("layer_id"));
+
+    m.def("clear_layer_selection", &clear_layer_selection,
+          "Clear layer selection (capture all layers)");
 }

@@ -295,6 +295,112 @@ inline void compute_statistics(const std::vector<float>& data, Statistics& out) 
     compute_statistics(data.data(), data.size(), out);
 }
 
+class WelfordAccumulator {
+public:
+    WelfordAccumulator() : count_(0), mean_(0.0), m2_(0.0), min_(1e30f), max_(-1e30f), 
+                           sum_sq_(0.0), zero_count_(0) {}
+    
+    void add(float value) {
+        count_++;
+        double delta = value - mean_;
+        mean_ += delta / count_;
+        double delta2 = value - mean_;
+        m2_ += delta * delta2;
+        
+        if (value < min_) min_ = value;
+        if (value > max_) max_ = value;
+        sum_sq_ += static_cast<double>(value) * value;
+        if (value == 0.0f) zero_count_++;
+        
+        values_.push_back(value);
+    }
+    
+    void add(const float* data, size_t n) {
+        values_.reserve(values_.size() + n);
+        for (size_t i = 0; i < n; ++i) {
+            add(data[i]);
+        }
+    }
+    
+    void reset() {
+        count_ = 0;
+        mean_ = 0.0;
+        m2_ = 0.0;
+        min_ = 1e30f;
+        max_ = -1e30f;
+        sum_sq_ = 0.0;
+        zero_count_ = 0;
+        values_.clear();
+    }
+    
+    Statistics get_statistics() const {
+        Statistics out;
+        if (count_ == 0) {
+            out = {};
+            return out;
+        }
+        
+        out.mean = static_cast<float>(mean_);
+        out.min = min_;
+        out.max = max_;
+        out.l2_norm = static_cast<float>(std::sqrt(sum_sq_));
+        out.zero_ratio = static_cast<float>(static_cast<double>(zero_count_) / count_);
+        
+        double variance = (count_ > 1) ? m2_ / count_ : 0.0;
+        out.std = static_cast<float>(std::sqrt(variance));
+        
+        std::vector<float> sorted = values_;
+        std::sort(sorted.begin(), sorted.end());
+        
+        auto percentile = [&sorted, this](double p) -> float {
+            if (count_ == 1) return sorted[0];
+            double idx = (count_ - 1) * p / 100.0;
+            size_t lower = static_cast<size_t>(std::floor(idx));
+            size_t upper = static_cast<size_t>(std::ceil(idx));
+            double frac = idx - lower;
+            return static_cast<float>(sorted[lower] * (1 - frac) + sorted[upper] * frac);
+        };
+        
+        out.p5 = percentile(5);
+        out.p25 = percentile(25);
+        out.p75 = percentile(75);
+        out.p95 = percentile(95);
+        
+        if (out.std > 0) {
+            double m3 = 0.0;
+            double m4 = 0.0;
+            for (float v : values_) {
+                double diff = (v - mean_) / out.std;
+                m3 += diff * diff * diff;
+                m4 += diff * diff * diff * diff;
+            }
+            m3 /= count_;
+            m4 /= count_;
+            out.skewness = static_cast<float>(m3);
+            out.kurtosis = static_cast<float>(m4 - 3.0);
+        } else {
+            out.skewness = 0.0f;
+            out.kurtosis = 0.0f;
+        }
+        
+        return out;
+    }
+    
+    size_t count() const { return count_; }
+    double mean() const { return mean_; }
+    double variance() const { return (count_ > 1) ? m2_ / count_ : 0.0; }
+    
+private:
+    size_t count_;
+    double mean_;
+    double m2_;
+    float min_;
+    float max_;
+    double sum_sq_;
+    size_t zero_count_;
+    std::vector<float> values_;
+};
+
 inline std::vector<uint8_t> build_packet(
     uint16_t msg_type,
     uint32_t flags,

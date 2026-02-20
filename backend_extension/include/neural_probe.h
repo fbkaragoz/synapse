@@ -17,6 +17,14 @@ NF_Result set_max_sparse_points(uint32_t max_points);
 void set_use_v2(bool use_v2);
 bool get_use_v2();
 
+NF_Result set_sample_rate(uint32_t rate);
+uint32_t get_sample_rate();
+
+NF_Result set_layer_selection_mode(uint32_t mode);
+NF_Result add_layer_to_whitelist(uint32_t layer_id);
+NF_Result add_layer_to_blacklist(uint32_t layer_id);
+NF_Result clear_layer_selection();
+
 void handle_control_message(const uint8_t* data, size_t len);
 std::vector<uint8_t> get_state_snapshot();
 std::vector<std::vector<uint8_t>> get_state_snapshot_packets();

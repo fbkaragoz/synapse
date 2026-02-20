@@ -308,3 +308,187 @@ TEST_CASE("Statistics computation - numerical stability", "[statistics]") {
         REQUIRE(std::isfinite(stats.l2_norm));
     }
 }
+
+TEST_CASE("Welford accumulator - basic operations", "[statistics]") {
+    
+    SECTION("Empty accumulator") {
+        WelfordAccumulator acc;
+        REQUIRE(acc.count() == 0);
+        REQUIRE(acc.mean() == Approx(0.0));
+    }
+    
+    SECTION("Single value") {
+        WelfordAccumulator acc;
+        acc.add(5.0f);
+        
+        REQUIRE(acc.count() == 1);
+        REQUIRE(acc.mean() == Approx(5.0));
+        
+        Statistics stats = acc.get_statistics();
+        REQUIRE(stats.mean == Approx(5.0f));
+        REQUIRE(stats.min == Approx(5.0f));
+        REQUIRE(stats.max == Approx(5.0f));
+    }
+    
+    SECTION("Multiple values") {
+        WelfordAccumulator acc;
+        for (int i = 1; i <= 5; ++i) {
+            acc.add(static_cast<float>(i));
+        }
+        
+        REQUIRE(acc.count() == 5);
+        REQUIRE(acc.mean() == Approx(3.0));
+        
+        Statistics stats = acc.get_statistics();
+        REQUIRE(stats.mean == Approx(3.0f));
+        REQUIRE(stats.min == Approx(1.0f));
+        REQUIRE(stats.max == Approx(5.0f));
+        REQUIRE(stats.std > 0);
+    }
+    
+    SECTION("Add array of values") {
+        std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
+        
+        WelfordAccumulator acc;
+        acc.add(data.data(), data.size());
+        
+        REQUIRE(acc.count() == 5);
+        REQUIRE(acc.mean() == Approx(3.0));
+    }
+}
+
+TEST_CASE("Welford accumulator - matches compute_statistics", "[statistics]") {
+    
+    SECTION("Uniform distribution") {
+        std::vector<float> data;
+        for (int i = 1; i <= 100; ++i) {
+            data.push_back(static_cast<float>(i));
+        }
+        
+        Statistics direct;
+        compute_statistics(data, direct);
+        
+        WelfordAccumulator acc;
+        acc.add(data.data(), data.size());
+        Statistics accumulated = acc.get_statistics();
+        
+        REQUIRE(accumulated.mean == Approx(direct.mean));
+        REQUIRE(accumulated.std == Approx(direct.std).margin(0.001f));
+        REQUIRE(accumulated.min == Approx(direct.min));
+        REQUIRE(accumulated.max == Approx(direct.max));
+        REQUIRE(accumulated.l2_norm == Approx(direct.l2_norm));
+    }
+    
+    SECTION("Mixed values") {
+        std::vector<float> data = {-2.0f, -1.0f, 0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
+        
+        Statistics direct;
+        compute_statistics(data, direct);
+        
+        WelfordAccumulator acc;
+        for (float v : data) {
+            acc.add(v);
+        }
+        Statistics accumulated = acc.get_statistics();
+        
+        REQUIRE(accumulated.mean == Approx(direct.mean));
+        REQUIRE(accumulated.std == Approx(direct.std).margin(0.001f));
+        REQUIRE(accumulated.zero_ratio == Approx(direct.zero_ratio));
+    }
+}
+
+TEST_CASE("Welford accumulator - reset", "[statistics]") {
+    
+    SECTION("Reset clears all state") {
+        WelfordAccumulator acc;
+        acc.add(1.0f);
+        acc.add(2.0f);
+        acc.add(3.0f);
+        
+        REQUIRE(acc.count() == 3);
+        
+        acc.reset();
+        
+        REQUIRE(acc.count() == 0);
+        REQUIRE(acc.mean() == Approx(0.0));
+        
+        Statistics stats = acc.get_statistics();
+        REQUIRE(stats.mean == Approx(0.0f));
+    }
+    
+    SECTION("Reuse after reset") {
+        WelfordAccumulator acc;
+        
+        acc.add(100.0f);
+        acc.add(200.0f);
+        acc.reset();
+        
+        acc.add(1.0f);
+        acc.add(2.0f);
+        acc.add(3.0f);
+        
+        REQUIRE(acc.count() == 3);
+        REQUIRE(acc.mean() == Approx(2.0));
+    }
+}
+
+TEST_CASE("Welford accumulator - incremental updates", "[statistics]") {
+    
+    SECTION("Incremental mean accuracy") {
+        WelfordAccumulator acc;
+        
+        acc.add(10.0f);
+        REQUIRE(acc.mean() == Approx(10.0));
+        
+        acc.add(20.0f);
+        REQUIRE(acc.mean() == Approx(15.0));
+        
+        acc.add(30.0f);
+        REQUIRE(acc.mean() == Approx(20.0));
+        
+        acc.add(40.0f);
+        REQUIRE(acc.mean() == Approx(25.0));
+    }
+    
+    SECTION("Numerical stability with many small updates") {
+        WelfordAccumulator acc;
+        
+        for (int i = 0; i < 10000; ++i) {
+            acc.add(0.001f);
+        }
+        
+        Statistics stats = acc.get_statistics();
+        REQUIRE(std::isfinite(stats.mean));
+        REQUIRE(std::isfinite(stats.std));
+        REQUIRE(stats.mean == Approx(0.001f));
+    }
+}
+
+TEST_CASE("Welford accumulator - zero ratio tracking", "[statistics]") {
+    
+    SECTION("Zero ratio computed correctly") {
+        WelfordAccumulator acc;
+        
+        for (int i = 0; i < 10; ++i) acc.add(0.0f);
+        for (int i = 0; i < 10; ++i) acc.add(1.0f);
+        
+        Statistics stats = acc.get_statistics();
+        REQUIRE(stats.zero_ratio == Approx(0.5f));
+    }
+    
+    SECTION("All zeros") {
+        WelfordAccumulator acc;
+        for (int i = 0; i < 100; ++i) acc.add(0.0f);
+        
+        Statistics stats = acc.get_statistics();
+        REQUIRE(stats.zero_ratio == Approx(1.0f));
+    }
+    
+    SECTION("No zeros") {
+        WelfordAccumulator acc;
+        for (int i = 1; i <= 100; ++i) acc.add(static_cast<float>(i));
+        
+        Statistics stats = acc.get_statistics();
+        REQUIRE(stats.zero_ratio == Approx(0.0f));
+    }
+}
