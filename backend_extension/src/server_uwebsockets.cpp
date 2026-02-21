@@ -1,15 +1,31 @@
 #include "server.h"
-#include "neural_probe.h" // For handle_control_message
+#include "neural_probe.h"
 #include <thread>
 
 #include <atomic>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <unordered_set>
 #include <vector>
 
-// uWebSockets
 #include "App.h"
+
+class BroadcastContext {
+public:
+    std::vector<uint8_t> payload;
+    
+    explicit BroadcastContext(std::vector<uint8_t>&& data) : payload(std::move(data)) {}
+    
+    static void defer_and_send(uWS::Loop* loop, uWS::App& app, std::unique_ptr<BroadcastContext> ctx) {
+        loop->defer([&app, ctx = ctx.release()]() {
+            app.publish("broadcast", 
+                std::string_view(reinterpret_cast<char*>(ctx->payload.data()), ctx->payload.size()), 
+                uWS::OpCode::BINARY, false);
+            delete ctx;
+        });
+    }
+};
 
 class UWebSocketsServer : public Server {
 public:
@@ -144,29 +160,11 @@ public:
             // Start a bridge thread that pops from queue and defers to loop
             std::thread bridge([this, &app]() {
                  while (running_) {
-                     // Wait for data
                      auto data_opt = buffer_->pop(); 
-                     if (!data_opt) break; // stopped
+                     if (!data_opt) break;
                      
-                     auto& data = *data_opt;
-                     
-                     // We have data. Schedule send on the loop.
-                     // We must copy data or move it into the lambda. Capture by value.
-                     // data is std::vector<uint8_t>
-                     
-                     struct Context {
-                         std::vector<uint8_t> payload;
-                     };
-                     auto* ctx = new Context{std::move(data)}; // Move to heap to pass to C-style callback if needed, or just C++ lambda capture
-
-                     // Loop::defer is thread safe?
-                     // uWebSockets documentation says: "Thread safety: ... Loop::defer is thread safe."
-                     loop_.load(std::memory_order_acquire)->defer([&app, ctx]() {
-                         // We are now on the loop thread
-                         // std::cout << "[Server] Broadcasting " << ctx->payload.size() << " bytes" << std::endl;
-                         app.publish("broadcast", std::string_view(reinterpret_cast<char*>(ctx->payload.data()), ctx->payload.size()), uWS::OpCode::BINARY, false);
-                         delete ctx;
-                     });
+                     auto ctx = std::make_unique<BroadcastContext>(std::move(*data_opt));
+                     BroadcastContext::defer_and_send(loop_.load(std::memory_order_acquire), app, std::move(ctx));
                  }
             });
             

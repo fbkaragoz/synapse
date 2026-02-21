@@ -515,7 +515,6 @@ pub fn parse_payload(data: &[u8], header: &PacketHeader) -> Result<ParsedPacket,
                 gradients: grad_list,
             });
         }
-<<<<<<< HEAD
         NF_MSG_LAYER_SUMMARY_BATCH_V2 => {
             if payload.len() < HEADER_SIZE_LAYER_SUMMARY_BATCH_V2 {
                 return Err(ParseError::PayloadTooShort);

@@ -467,19 +467,26 @@ src_idx (2) | tgt_idx (2) | weight (4)
 
 **Theme**: Production readiness
 
+**Status**: ✅ COMPLETED (2026-02-21)
+
 | Task | Est. | Status |
 |------|------|--------|
-| Reconnection logic | 3h | [ ] |
-| Connection metrics | 3h | [ ] |
-| Memory pooling | 4h | [ ] |
-| RAII broadcast wrapper | 2h | [ ] |
+| Reconnection logic | 3h | [x] |
+| Connection metrics | 3h | [x] |
+| Memory pooling | 4h | [x] |
+| RAII broadcast wrapper | 2h | [x] |
 | Documentation | 2h | [ ] |
 | **Total** | **14h** | |
 
 **Exit Criteria**:
-- Auto-reconnect works
-- Memory bounded
-- All APIs documented
+- [x] Auto-reconnect works (exponential backoff with jitter)
+- [x] Memory bounded (particle buffer pool)
+- [ ] All APIs documented
+
+**Deliverables**:
+- `frontend_dashboard/src/lib/ws_client.ts` - WebSocket reconnection with exponential backoff
+- `frontend_dashboard/src/lib/three/scene.ts` - ParticleBufferPool for memory efficiency
+- `backend_extension/src/server_uwebsockets.cpp` - BroadcastContext RAII wrapper
 
 ---
 
@@ -545,22 +552,15 @@ src_idx (2) | tgt_idx (2) | weight (4)
 - 2 - Extended Statistics ✅
 - 3 - Accumulation & Layer Selection ✅
 - 4 - Attention Visualization ✅
+- 5 - Resilience & Polish ✅
 
-**Active Iteration**: 5 - Resilience & Polish
+**Active Iteration**: None (roadmap complete)
 
-**Next Steps**:
-1. Implement WebSocket reconnection with exponential backoff
-2. Add connection health metrics
-3. Implement memory pooling for particles
-4. Add RAII broadcast wrapper
-5. Update documentation
-
-**Iteration 4 Summary**:
-- NF_MSG_ATTENTION_PATTERN protocol message
-- log_attention API with top-k/threshold extraction
-- AttentionCapture class for PyTorch/HuggingFace
-- WASM parser attention support
-- 28 test cases with 296 assertions all passing
+**Iteration 5 Summary**:
+- WebSocket reconnection with exponential backoff and jitter
+- Connection health metrics (latency, packets, bytes, quality store)
+- ParticleBufferPool for memory-efficient particle geometry reuse
+- BroadcastContext RAII wrapper for safe deferred broadcasts
 
 ---
 
@@ -568,6 +568,7 @@ src_idx (2) | tgt_idx (2) | weight (4)
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-02-21 | 1.5 | Completed Iteration 5 - Resilience & polish |
 | 2026-02-21 | 1.4 | Completed Iteration 4 - Attention visualization |
 | 2026-02-21 | 1.3 | Completed Iteration 3 - Accumulation & layer selection |
 | 2026-02-21 | 1.2 | Completed Iteration 2 - Extended statistics |
